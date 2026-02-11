@@ -64,7 +64,6 @@
   "files": [
     "dist",
     "README.md",
-    "Dockerfile",
     "Dockerfile.saas",
     "Dockerfile.dev",
     "docker/"

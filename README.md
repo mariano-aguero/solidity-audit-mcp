@@ -10,11 +10,14 @@ A Model Context Protocol (MCP) server for automated security analysis of Solidit
 
 The Solidity Audit MCP provides AI assistants (like Claude) with the ability to perform comprehensive security audits on Solidity smart contracts. It combines multiple analysis approaches:
 
+**External Analyzers (require installation):**
 - **Slither** - Trail of Bits' static analysis framework with 90+ vulnerability detectors
 - **Aderyn** - Cyfrin's Rust-based analyzer for fast, accurate detection
-- **Slang** - Nomic Foundation's Solidity parser for precise AST-based vulnerability detection
+- **Foundry** - Run forge tests and get coverage reports
+
+**Built-in Analysis (no external dependencies):**
+- **Slang Parser** - Nomic Foundation's Solidity parser (`@nomicfoundation/slang`) for precise AST-based vulnerability detection. Included as npm dependency.
 - **SWC Pattern Matching** - Detection against the Smart Contract Weakness Classification registry
-- **Foundry Integration** - Run forge tests and get coverage reports
 
 Findings from multiple tools are automatically deduplicated and sorted by severity, giving you a unified view of potential issues.
 
@@ -104,7 +107,7 @@ solc --version
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/solidity-audit-mcp.git
+git clone https://github.com/mariano-aguero/solidity-audit-mcp.git
 cd solidity-audit-mcp
 
 # Install dependencies
@@ -1025,7 +1028,6 @@ solidity-audit-mcp/
 │   ├── ci/
 │   ├── detectors/
 │   └── fixtures/             # Test Solidity contracts
-├── Dockerfile              # Multi-stage production build (stdio)
 ├── Dockerfile.saas         # SaaS deployment (HTTP/SSE)
 ├── Dockerfile.dev          # Development with hot-reload
 ├── docker/docker-compose.yml      # Local container orchestration
