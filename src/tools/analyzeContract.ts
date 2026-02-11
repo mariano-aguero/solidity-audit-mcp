@@ -951,7 +951,10 @@ function formatOutput(result: AnalysisResult): string {
       // Show full description, just clean up newlines
       const cleanDesc = finding.description.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
       lines.push(`     ${cleanDesc}`);
-      if (finding.recommendation && finding.recommendation !== "Review the code and apply appropriate fixes") {
+      if (
+        finding.recommendation &&
+        finding.recommendation !== "Review the code and apply appropriate fixes"
+      ) {
         lines.push(`     Recommendation: ${finding.recommendation}`);
       }
     }
@@ -1039,4 +1042,3 @@ function getSeverityEmoji(severity: Severity): string {
       return "🔵";
   }
 }
-

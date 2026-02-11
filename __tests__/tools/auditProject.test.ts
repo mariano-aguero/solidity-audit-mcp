@@ -223,9 +223,14 @@ describe("auditProject", () => {
       skipTests: true,
     });
 
-    // Should identify payable as a risk indicator
-    expect(result).toContain("payable");
+    // Should identify payable contract
     expect(result).toContain("PayableContract");
+
+    // Verify payable indicator in JSON data
+    const jsonMatch = result.match(/```json\n([\s\S]*?)\n```/);
+    expect(jsonMatch).toBeTruthy();
+    const jsonData = JSON.parse(jsonMatch![1]!);
+    expect(jsonData.projectSummary.contractsWithPayable).toBe(1);
   });
 
   it("should respect maxContracts limit", async () => {
@@ -327,10 +332,15 @@ describe("auditProject", () => {
       skipTests: true,
     });
 
-    // Should include risk indicators
-    expect(result).toContain("payable");
+    // Should include contract metadata
     expect(result).toContain("**Type:**");
     expect(result).toContain("**SLOC:**");
+
+    // Verify payable indicator in JSON
+    const jsonMatch = result.match(/```json\n([\s\S]*?)\n```/);
+    expect(jsonMatch).toBeTruthy();
+    const jsonData = JSON.parse(jsonMatch![1]!);
+    expect(jsonData.contractReports[0]?.contract.hasPayable).toBe(true);
   });
 
   it("should run sequentially when parallel=false", async () => {
