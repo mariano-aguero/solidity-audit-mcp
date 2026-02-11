@@ -3,6 +3,7 @@
 [![CI](https://github.com/mariano-aguero/solidity-audit-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/mariano-aguero/solidity-audit-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+[![Claude](https://img.shields.io/badge/Claude-MCP%20Compatible-blueviolet?logo=anthropic)](https://claude.ai)
 
 A Model Context Protocol (MCP) server for automated security analysis of Solidity smart contracts. Integrates with industry-standard tools like Slither and Aderyn, plus built-in pattern matching against the SWC Registry.
 
