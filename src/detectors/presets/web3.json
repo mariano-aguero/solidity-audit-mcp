@@ -1,0 +1,109 @@
+{
+  "name": "web3",
+  "description": "Common detectors for Web3/Solidity projects",
+  "version": "1.0.0",
+  "detectors": [
+    {
+      "id": "no-hardcoded-addresses",
+      "title": "Hardcoded Address Detected",
+      "description": "Contract contains hardcoded Ethereum addresses which reduces flexibility, makes testing difficult, and may pose security risks if the address is compromised or needs to change",
+      "severity": "LOW",
+      "type": "regex",
+      "pattern": "(?<!//.*)(0x[a-fA-F0-9]{40})",
+      "exclude": ["test/", "script/", "mock/", "Mock"],
+      "recommendation": "Use constructor parameters, immutable variables, or a registry pattern for addresses. Consider using environment-specific configuration."
+    },
+    {
+      "id": "no-magic-numbers",
+      "title": "Magic Number Detected",
+      "description": "Numeric literals (other than 0, 1, 2) should be defined as named constants for clarity and maintainability. Magic numbers make code harder to understand and audit.",
+      "severity": "INFORMATIONAL",
+      "type": "regex",
+      "pattern": "(?<!0x)(?<![a-zA-Z_])([3-9]\\d{2,}|[1-9]\\d{3,})(?![a-fA-F0-9]|\\s*\\])",
+      "exclude": ["test/", "script/"],
+      "recommendation": "Extract magic numbers to named constants with descriptive names (e.g., MAX_SUPPLY, FEE_DENOMINATOR, PRECISION)."
+    },
+    {
+      "id": "no-console-log",
+      "title": "Console.log Left in Code",
+      "description": "Hardhat console.sol import or console.log calls found in production contract. These increase gas costs and should not be deployed to mainnet.",
+      "severity": "MEDIUM",
+      "type": "regex",
+      "pattern": "(import\\s+[\"']hardhat/console\\.sol[\"']|console\\.(log|logInt|logUint|logString|logBool|logAddress|logBytes)\\s*\\()",
+      "exclude": ["test/", "script/"],
+      "recommendation": "Remove all console.sol imports and console.log calls before deployment. Consider using events for production logging."
+    },
+    {
+      "id": "no-todo-comments",
+      "title": "TODO/FIXME Comment Found",
+      "description": "Unresolved TODO, FIXME, HACK, or XXX comments indicate incomplete implementation or known issues that should be addressed before deployment.",
+      "severity": "LOW",
+      "type": "regex",
+      "pattern": "//\\s*(TODO|FIXME|HACK|XXX|BUG)\\b",
+      "caseInsensitive": true,
+      "recommendation": "Resolve all TODO/FIXME comments before deployment. If intentional, document the reason and create tracking issues."
+    },
+    {
+      "id": "require-natspec",
+      "title": "Missing NatSpec Documentation",
+      "description": "Public or external functions should have NatSpec documentation (@notice, @param, @return) for better code documentation and automatic documentation generation.",
+      "severity": "INFORMATIONAL",
+      "type": "ast-pattern",
+      "match": {
+        "hasVisibility": "external"
+      },
+      "recommendation": "Add NatSpec comments above public/external functions: /// @notice Description /// @param paramName Description /// @return Description"
+    },
+    {
+      "id": "require-events",
+      "title": "State Change Without Event",
+      "description": "Functions that modify state variables should emit events to enable off-chain tracking, indexing, and monitoring of contract activity.",
+      "severity": "LOW",
+      "type": "ast-pattern",
+      "match": {
+        "modifiesState": true,
+        "hasVisibility": "external"
+      },
+      "recommendation": "Emit an event for every state-changing operation. Use indexed parameters for filterable fields (addresses, IDs)."
+    },
+    {
+      "id": "no-floating-pragma",
+      "title": "Floating Pragma Detected",
+      "description": "Contract uses floating pragma (^ or >=) instead of a fixed version. This can lead to unexpected behavior if compiled with a different compiler version.",
+      "severity": "LOW",
+      "type": "regex",
+      "pattern": "pragma\\s+solidity\\s*[\\^>=<]",
+      "recommendation": "Use a fixed pragma version (e.g., 'pragma solidity 0.8.20;') to ensure consistent compilation and avoid unexpected breaking changes."
+    },
+    {
+      "id": "centralization-risk",
+      "title": "Centralization Risk - Critical Admin Function",
+      "description": "Functions with admin-only access (onlyOwner, onlyAdmin, onlyRole) that can pause the protocol, mint tokens, change fees, or modify critical parameters pose centralization risks.",
+      "severity": "MEDIUM",
+      "type": "ast-pattern",
+      "match": {
+        "hasModifier": "onlyOwner",
+        "modifiesState": true
+      },
+      "recommendation": "Consider implementing: 1) Timelock delays for critical operations, 2) Multi-sig requirements, 3) Maximum bounds for fee changes, 4) Decentralized governance for sensitive functions."
+    },
+    {
+      "id": "missing-zero-check",
+      "title": "Missing Zero Address Check",
+      "description": "Address parameters should be validated against address(0) to prevent accidentally setting critical addresses to the zero address, which could lock funds or break functionality.",
+      "severity": "LOW",
+      "type": "regex",
+      "pattern": "function\\s+\\w+\\s*\\([^)]*address\\s+(?!.*address\\s*\\(\\s*0\\s*\\))[^)]*\\)\\s*(external|public)",
+      "recommendation": "Add require(addr != address(0), \"Zero address\") checks for all address parameters in public/external functions, especially for owner, admin, or token addresses."
+    },
+    {
+      "id": "large-approval",
+      "title": "Unlimited Token Approval",
+      "description": "Using type(uint256).max for token approvals grants unlimited spending power. If the approved contract is compromised, all tokens can be stolen.",
+      "severity": "MEDIUM",
+      "type": "regex",
+      "pattern": "\\.approve\\s*\\([^,]+,\\s*type\\s*\\(\\s*uint256\\s*\\)\\s*\\.\\s*max\\s*\\)",
+      "recommendation": "Consider: 1) Approving only the exact amount needed, 2) Using increaseAllowance/decreaseAllowance, 3) Documenting why unlimited approval is necessary, 4) Implementing approval reset mechanisms."
+    }
+  ]
+}

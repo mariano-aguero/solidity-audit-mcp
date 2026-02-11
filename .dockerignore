@@ -1,0 +1,65 @@
+# =============================================================================
+# Docker Ignore
+# =============================================================================
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+coverage/
+*.tsbuildinfo
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Docker files (prevent recursive copies)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Test files
+__tests__/
+*.test.ts
+*.spec.ts
+vitest.config.ts
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Cache
+.npm/
+.cache/
+
+# Foundry artifacts (if present)
+out/
+cache/
+broadcast/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

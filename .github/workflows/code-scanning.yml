@@ -1,0 +1,159 @@
+# GitHub Code Scanning with MCP Audit Server
+#
+# This workflow runs security analysis on Solidity contracts and uploads
+# results to GitHub's Security tab using SARIF format.
+#
+# Results appear in:
+# - Security tab > Code scanning alerts
+# - PR annotations on affected lines
+# - Security overview for the repository
+#
+# Prerequisites:
+# 1. Enable GitHub Advanced Security (free for public repos)
+# 2. Go to Settings > Security > Code security and analysis
+# 3. Enable "Code scanning"
+
+name: Code Scanning
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "**.sol"
+      - "contracts/**"
+      - "src/**/*.sol"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "**.sol"
+      - "contracts/**"
+      - "src/**/*.sol"
+  schedule:
+    # Run weekly on Sunday at midnight
+    - cron: "0 0 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze Contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Slither
+        run: pip install slither-analyzer
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Install MCP Audit Server
+        run: npm install -g solidity-audit-mcp
+
+      - name: Find Solidity files
+        id: find-sol
+        run: |
+          # Find all .sol files, excluding test/mock directories
+          SOL_FILES=$(find . -name "*.sol" -type f \
+            ! -path "*/test/*" \
+            ! -path "*/tests/*" \
+            ! -path "*/mock/*" \
+            ! -path "*/mocks/*" \
+            ! -path "*/node_modules/*" \
+            | head -20)
+
+          if [ -z "$SOL_FILES" ]; then
+            echo "No Solidity files found"
+            echo "found=false" >> $GITHUB_OUTPUT
+          else
+            echo "Found Solidity files:"
+            echo "$SOL_FILES"
+            echo "found=true" >> $GITHUB_OUTPUT
+            # Save to file for later use
+            echo "$SOL_FILES" > /tmp/sol_files.txt
+          fi
+
+      - name: Run Security Audit
+        if: steps.find-sol.outputs.found == 'true'
+        run: |
+          # Create output directory
+          mkdir -p audit-results
+
+          # Combined SARIF results
+          COMBINED_SARIF='{"$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","version":"2.1.0","runs":[]}'
+
+          # Audit each file
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              echo "Auditing: $file"
+
+              # Run audit and capture SARIF output
+              SARIF_OUTPUT=$(audit-cli audit "$file" --format sarif --quiet 2>/dev/null || echo '{}')
+
+              # Extract runs array and merge
+              RUNS=$(echo "$SARIF_OUTPUT" | jq -c '.runs // []' 2>/dev/null || echo '[]')
+              COMBINED_SARIF=$(echo "$COMBINED_SARIF" | jq --argjson runs "$RUNS" '.runs += $runs')
+            fi
+          done < /tmp/sol_files.txt
+
+          # Write combined SARIF
+          echo "$COMBINED_SARIF" | jq '.' > audit-results/security.sarif
+
+          # Also run gas analysis
+          echo '{"$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","version":"2.1.0","runs":[]}' > /tmp/gas_sarif.json
+
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              GAS_OUTPUT=$(audit-cli gas "$file" --format sarif --quiet 2>/dev/null || echo '{}')
+              RUNS=$(echo "$GAS_OUTPUT" | jq -c '.runs // []' 2>/dev/null || echo '[]')
+              CURRENT=$(cat /tmp/gas_sarif.json)
+              echo "$CURRENT" | jq --argjson runs "$RUNS" '.runs += $runs' > /tmp/gas_sarif.json
+            fi
+          done < /tmp/sol_files.txt
+
+          cp /tmp/gas_sarif.json audit-results/gas.sarif
+
+          echo "Audit complete. SARIF files generated."
+          ls -la audit-results/
+
+      - name: Upload Security SARIF
+        if: steps.find-sol.outputs.found == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: audit-results/security.sarif
+          category: "smart-contract-security"
+        continue-on-error: true
+
+      - name: Upload Gas SARIF
+        if: steps.find-sol.outputs.found == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: audit-results/gas.sarif
+          category: "gas-optimization"
+        continue-on-error: true
+
+      - name: Upload Artifacts
+        if: always() && steps.find-sol.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-results
+          path: audit-results/
+          retention-days: 30

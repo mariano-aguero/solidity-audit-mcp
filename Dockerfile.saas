@@ -1,0 +1,94 @@
+# =============================================================================
+# MCP Audit Server - SaaS Docker Image
+# =============================================================================
+# Production-ready image for running as a remote service
+# Exposes HTTP/SSE endpoint for MCP clients
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Build the MCP Server (Node.js)
+# -----------------------------------------------------------------------------
+FROM node:20-bookworm AS node-builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# -----------------------------------------------------------------------------
+# Stage 2: Final Runtime Image
+# -----------------------------------------------------------------------------
+FROM node:20-bookworm-slim
+
+LABEL org.opencontainers.image.title="MCP Audit Server SaaS"
+LABEL org.opencontainers.image.description="MCP Server for Solidity audits - HTTP/SSE transport"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
+    git \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python virtual environment
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Install Slither and solc-select
+RUN pip3 install --no-cache-dir \
+    slither-analyzer \
+    solc-select
+
+# Install common Solidity versions
+RUN solc-select install 0.8.28 0.8.24 0.8.20 0.8.19 0.8.17 0.8.13 0.8.0 0.7.6 0.6.12 \
+    && solc-select use 0.8.28
+
+# Install Foundry
+RUN curl -L https://foundry.paradigm.xyz | bash \
+    && /root/.foundry/bin/foundryup
+ENV PATH="/root/.foundry/bin:$PATH"
+
+# Install Aderyn from pre-built binary (avoids Rust compilation issues)
+# Download latest release from GitHub
+RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
+    && ADERYN_VERSION=$(curl -s https://api.github.com/repos/Cyfrin/aderyn/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') \
+    && echo "Installing Aderyn $ADERYN_VERSION" \
+    && curl -L "https://github.com/Cyfrin/aderyn/releases/download/${ADERYN_VERSION}/aderyn-x86_64-unknown-linux-gnu.tar.xz" -o /tmp/aderyn.tar.xz \
+    && tar -xJf /tmp/aderyn.tar.xz -C /tmp \
+    && mv /tmp/aderyn-x86_64-unknown-linux-gnu/aderyn /usr/local/bin/aderyn \
+    && rm -rf /tmp/aderyn.tar.xz /tmp/aderyn-x86_64-unknown-linux-gnu \
+    && chmod +x /usr/local/bin/aderyn
+
+# Create app directory
+WORKDIR /app
+
+# Copy built application
+COPY --from=node-builder /app/dist ./dist
+COPY --from=node-builder /app/node_modules ./node_modules
+COPY --from=node-builder /app/package.json ./
+
+# Create directories for mounted contracts
+RUN mkdir -p /contracts /workspace
+
+# Environment variables
+ENV NODE_ENV=production
+ENV MCP_AUDIT_LOG_LEVEL=info
+ENV PORT=3000
+ENV HOST=0.0.0.0
+
+# Expose HTTP port
+EXPOSE 3000
+
+# Health check (use /health/quick for fast checks, /health for full analyzer status)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:3000/health/quick || exit 1
+
+# Run SSE server
+ENTRYPOINT ["node", "dist/server.js"]

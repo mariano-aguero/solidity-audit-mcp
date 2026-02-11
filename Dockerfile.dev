@@ -1,0 +1,55 @@
+# =============================================================================
+# MCP Audit Server - Development Dockerfile
+# =============================================================================
+# For development with hot-reload and debugging
+# =============================================================================
+
+FROM node:20-bookworm
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
+    git \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment for Python
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Install Slither and solc-select
+RUN pip3 install --no-cache-dir \
+    slither-analyzer \
+    solc-select
+
+# Install common Solidity versions
+RUN solc-select install 0.8.28 0.8.24 0.8.20 0.8.19 \
+    && solc-select use 0.8.28
+
+# Install Foundry
+RUN curl -L https://foundry.paradigm.xyz | bash \
+    && /root/.foundry/bin/foundryup
+ENV PATH="/root/.foundry/bin:$PATH"
+
+# Install Aderyn from pre-built binary (avoids Rust compilation issues)
+RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
+    && ADERYN_VERSION=$(curl -s https://api.github.com/repos/Cyfrin/aderyn/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') \
+    && echo "Installing Aderyn $ADERYN_VERSION" \
+    && curl -L "https://github.com/Cyfrin/aderyn/releases/download/${ADERYN_VERSION}/aderyn-x86_64-unknown-linux-gnu.tar.xz" -o /tmp/aderyn.tar.xz \
+    && tar -xJf /tmp/aderyn.tar.xz -C /tmp \
+    && mv /tmp/aderyn-x86_64-unknown-linux-gnu/aderyn /usr/local/bin/aderyn \
+    && rm -rf /tmp/aderyn.tar.xz /tmp/aderyn-x86_64-unknown-linux-gnu \
+    && chmod +x /usr/local/bin/aderyn
+
+# Create app directory
+WORKDIR /app
+
+# Install global dev tools
+RUN npm install -g tsx
+
+# Default command for development
+CMD ["npm", "run", "dev"]

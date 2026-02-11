@@ -1,0 +1,499 @@
+name: "Smart Contract Audit"
+description: "Run security analysis and gas optimization on Solidity contracts"
+author: "MCP Audit Server"
+
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  contracts-path:
+    description: "Path to the contracts directory"
+    required: false
+    default: "contracts/"
+  severity-threshold:
+    description: "Minimum severity to fail the check (critical, high, medium, low, informational)"
+    required: false
+    default: "high"
+  include-gas:
+    description: "Run gas optimization analysis"
+    required: false
+    default: "true"
+  diff-only:
+    description: "Only audit files changed in the PR"
+    required: false
+    default: "true"
+  comment-on-pr:
+    description: "Post audit results as a PR comment"
+    required: false
+    default: "true"
+  fail-on-findings:
+    description: "Fail the action if findings above threshold are detected"
+    required: false
+    default: "true"
+  sarif-output:
+    description: "Generate SARIF output for GitHub Code Scanning"
+    required: false
+    default: "true"
+  working-directory:
+    description: "Working directory for the audit"
+    required: false
+    default: "."
+
+outputs:
+  findings-count:
+    description: "Total number of security findings"
+    value: ${{ steps.audit.outputs.findings-count }}
+  critical-count:
+    description: "Number of critical findings"
+    value: ${{ steps.audit.outputs.critical-count }}
+  high-count:
+    description: "Number of high severity findings"
+    value: ${{ steps.audit.outputs.high-count }}
+  medium-count:
+    description: "Number of medium severity findings"
+    value: ${{ steps.audit.outputs.medium-count }}
+  gas-savings:
+    description: "Estimated gas savings from optimizations"
+    value: ${{ steps.audit.outputs.gas-savings }}
+  risk-level:
+    description: "Overall risk level (critical, high, medium, low, clean)"
+    value: ${{ steps.audit.outputs.risk-level }}
+  sarif-file:
+    description: "Path to the SARIF output file"
+    value: ${{ steps.audit.outputs.sarif-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install Slither
+      shell: bash
+      run: |
+        pip install slither-analyzer
+        echo "Slither version: $(slither --version)"
+
+    - name: Install Foundry
+      uses: foundry-rs/foundry-toolchain@v1
+      with:
+        version: nightly
+
+    - name: Install Aderyn
+      shell: bash
+      run: |
+        curl -L https://raw.githubusercontent.com/Cyfrin/aderyn/dev/cyfrinup/install | bash
+        export PATH="$HOME/.cyfrin/bin:$PATH"
+        cyfrinup
+        echo "$HOME/.cyfrin/bin" >> $GITHUB_PATH
+        echo "Aderyn installed"
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Install MCP Audit Server
+      shell: bash
+      run: |
+        npm install -g solidity-audit-mcp
+        echo "MCP Audit Server installed"
+
+    - name: Get changed files
+      id: changed-files
+      if: ${{ inputs.diff-only == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      run: |
+        # Get list of changed .sol files
+        CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | grep '\.sol$' || true)
+        echo "Changed Solidity files:"
+        echo "$CHANGED_FILES"
+        echo "changed-files<<EOF" >> $GITHUB_OUTPUT
+        echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+        # Count changed files
+        if [ -z "$CHANGED_FILES" ]; then
+          echo "count=0" >> $GITHUB_OUTPUT
+        else
+          echo "count=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run Audit
+      id: audit
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CONTRACTS_PATH: ${{ inputs.contracts-path }}
+        SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
+        INCLUDE_GAS: ${{ inputs.include-gas }}
+        DIFF_ONLY: ${{ inputs.diff-only }}
+        CHANGED_FILES: ${{ steps.changed-files.outputs.changed-files }}
+        CHANGED_COUNT: ${{ steps.changed-files.outputs.count }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.sha }}
+        SARIF_OUTPUT: ${{ inputs.sarif-output }}
+      run: |
+        set +e  # Don't exit on error
+
+        # Initialize output files
+        AUDIT_OUTPUT_DIR="${RUNNER_TEMP}/audit-results"
+        mkdir -p "$AUDIT_OUTPUT_DIR"
+
+        SECURITY_JSON="${AUDIT_OUTPUT_DIR}/security.json"
+        GAS_JSON="${AUDIT_OUTPUT_DIR}/gas.json"
+        DIFF_JSON="${AUDIT_OUTPUT_DIR}/diff.json"
+        SARIF_FILE="${AUDIT_OUTPUT_DIR}/results.sarif"
+        SUMMARY_JSON="${AUDIT_OUTPUT_DIR}/summary.json"
+
+        # Initialize counters
+        CRITICAL_COUNT=0
+        HIGH_COUNT=0
+        MEDIUM_COUNT=0
+        LOW_COUNT=0
+        INFO_COUNT=0
+        GAS_SAVINGS=0
+        FINDINGS_COUNT=0
+
+        # Determine which files to audit
+        if [ "$DIFF_ONLY" == "true" ] && [ -n "$CHANGED_FILES" ] && [ "$CHANGED_COUNT" != "0" ]; then
+          echo "Running diff-only audit on $CHANGED_COUNT changed files..."
+          FILES_TO_AUDIT="$CHANGED_FILES"
+        else
+          echo "Running full audit on $CONTRACTS_PATH..."
+          FILES_TO_AUDIT=$(find "$CONTRACTS_PATH" -name "*.sol" -type f 2>/dev/null || true)
+        fi
+
+        if [ -z "$FILES_TO_AUDIT" ]; then
+          echo "No Solidity files found to audit"
+          echo '{"findings":[],"gasOptimizations":[],"summary":{"critical":0,"high":0,"medium":0,"low":0,"informational":0}}' > "$SUMMARY_JSON"
+        else
+          # Run security audit on each file
+          ALL_FINDINGS="[]"
+          ALL_GAS="[]"
+
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              echo "Auditing: $file"
+
+              # Run security audit
+              RESULT=$(audit-cli audit "$file" --format json --severity-threshold "$SEVERITY_THRESHOLD" 2>/dev/null || echo '{"findings":[]}')
+              FILE_FINDINGS=$(echo "$RESULT" | jq -c '.findings // []' 2>/dev/null || echo '[]')
+              ALL_FINDINGS=$(echo "$ALL_FINDINGS $FILE_FINDINGS" | jq -s 'add' 2>/dev/null || echo '[]')
+
+              # Run gas optimization if enabled
+              if [ "$INCLUDE_GAS" == "true" ]; then
+                GAS_RESULT=$(audit-cli gas "$file" --format json 2>/dev/null || echo '{"findings":[]}')
+                FILE_GAS=$(echo "$GAS_RESULT" | jq -c '.findings // []' 2>/dev/null || echo '[]')
+                ALL_GAS=$(echo "$ALL_GAS $FILE_GAS" | jq -s 'add' 2>/dev/null || echo '[]')
+              fi
+            fi
+          done <<< "$FILES_TO_AUDIT"
+
+          # Save results
+          echo "$ALL_FINDINGS" | jq '.' > "$SECURITY_JSON"
+          echo "$ALL_GAS" | jq '.' > "$GAS_JSON"
+
+          # Count findings by severity
+          CRITICAL_COUNT=$(echo "$ALL_FINDINGS" | jq '[.[] | select(.severity == "critical")] | length' 2>/dev/null || echo 0)
+          HIGH_COUNT=$(echo "$ALL_FINDINGS" | jq '[.[] | select(.severity == "high")] | length' 2>/dev/null || echo 0)
+          MEDIUM_COUNT=$(echo "$ALL_FINDINGS" | jq '[.[] | select(.severity == "medium")] | length' 2>/dev/null || echo 0)
+          LOW_COUNT=$(echo "$ALL_FINDINGS" | jq '[.[] | select(.severity == "low")] | length' 2>/dev/null || echo 0)
+          INFO_COUNT=$(echo "$ALL_FINDINGS" | jq '[.[] | select(.severity == "informational")] | length' 2>/dev/null || echo 0)
+          FINDINGS_COUNT=$((CRITICAL_COUNT + HIGH_COUNT + MEDIUM_COUNT + LOW_COUNT + INFO_COUNT))
+
+          # Estimate gas savings
+          GAS_COUNT=$(echo "$ALL_GAS" | jq 'length' 2>/dev/null || echo 0)
+          GAS_SAVINGS=$((GAS_COUNT * 100))  # Rough estimate
+
+          # Generate SARIF if requested
+          if [ "$SARIF_OUTPUT" == "true" ]; then
+            # Initialize combined SARIF structure
+            echo '{"$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","version":"2.1.0","runs":[]}' > "$SARIF_FILE"
+
+            # Generate SARIF for each file and merge runs
+            while IFS= read -r file; do
+              if [ -f "$file" ]; then
+                TEMP_SARIF="${AUDIT_OUTPUT_DIR}/temp_$(basename "$file").sarif"
+                audit-cli audit "$file" --format sarif --output "$TEMP_SARIF" --quiet 2>/dev/null || true
+
+                if [ -f "$TEMP_SARIF" ]; then
+                  # Merge runs into combined SARIF
+                  RUNS=$(jq -c '.runs // []' "$TEMP_SARIF" 2>/dev/null || echo '[]')
+                  CURRENT=$(cat "$SARIF_FILE")
+                  echo "$CURRENT" | jq --argjson runs "$RUNS" '.runs += $runs' > "${SARIF_FILE}.tmp"
+                  mv "${SARIF_FILE}.tmp" "$SARIF_FILE"
+                  rm -f "$TEMP_SARIF"
+                fi
+              fi
+            done <<< "$FILES_TO_AUDIT"
+
+            echo "SARIF report generated at $SARIF_FILE"
+          fi
+
+          # Create summary JSON
+          jq -n \
+            --argjson critical "$CRITICAL_COUNT" \
+            --argjson high "$HIGH_COUNT" \
+            --argjson medium "$MEDIUM_COUNT" \
+            --argjson low "$LOW_COUNT" \
+            --argjson informational "$INFO_COUNT" \
+            --argjson gasCount "$GAS_COUNT" \
+            --argjson gasSavings "$GAS_SAVINGS" \
+            --argjson findings "$ALL_FINDINGS" \
+            --argjson gasOptimizations "$ALL_GAS" \
+            '{
+              summary: {
+                critical: $critical,
+                high: $high,
+                medium: $medium,
+                low: $low,
+                informational: $informational,
+                gasOptimizations: $gasCount,
+                estimatedGasSavings: $gasSavings
+              },
+              findings: $findings,
+              gasOptimizations: $gasOptimizations
+            }' > "$SUMMARY_JSON"
+        fi
+
+        # Determine risk level
+        if [ "$CRITICAL_COUNT" -gt 0 ]; then
+          RISK_LEVEL="critical"
+        elif [ "$HIGH_COUNT" -gt 0 ]; then
+          RISK_LEVEL="high"
+        elif [ "$MEDIUM_COUNT" -gt 0 ]; then
+          RISK_LEVEL="medium"
+        elif [ "$LOW_COUNT" -gt 0 ]; then
+          RISK_LEVEL="low"
+        else
+          RISK_LEVEL="clean"
+        fi
+
+        # Set outputs
+        echo "findings-count=$FINDINGS_COUNT" >> $GITHUB_OUTPUT
+        echo "critical-count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+        echo "high-count=$HIGH_COUNT" >> $GITHUB_OUTPUT
+        echo "medium-count=$MEDIUM_COUNT" >> $GITHUB_OUTPUT
+        echo "gas-savings=$GAS_SAVINGS" >> $GITHUB_OUTPUT
+        echo "risk-level=$RISK_LEVEL" >> $GITHUB_OUTPUT
+        echo "sarif-file=$SARIF_FILE" >> $GITHUB_OUTPUT
+        echo "summary-file=$SUMMARY_JSON" >> $GITHUB_OUTPUT
+
+        # Print summary
+        echo ""
+        echo "========================================"
+        echo "       AUDIT SUMMARY"
+        echo "========================================"
+        echo "Risk Level: $RISK_LEVEL"
+        echo "Critical: $CRITICAL_COUNT"
+        echo "High: $HIGH_COUNT"
+        echo "Medium: $MEDIUM_COUNT"
+        echo "Low: $LOW_COUNT"
+        echo "Informational: $INFO_COUNT"
+        echo "Gas Optimizations: $GAS_COUNT (~$GAS_SAVINGS gas savings)"
+        echo "========================================"
+
+    - name: Upload SARIF to GitHub
+      if: ${{ inputs.sarif-output == 'true' && steps.audit.outputs.sarif-file != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.audit.outputs.sarif-file }}
+      continue-on-error: true
+
+    - name: Comment on PR
+      if: ${{ inputs.comment-on-pr == 'true' && github.event_name == 'pull_request' }}
+      uses: actions/github-script@v7
+      env:
+        FINDINGS_COUNT: ${{ steps.audit.outputs.findings-count }}
+        CRITICAL_COUNT: ${{ steps.audit.outputs.critical-count }}
+        HIGH_COUNT: ${{ steps.audit.outputs.high-count }}
+        MEDIUM_COUNT: ${{ steps.audit.outputs.medium-count }}
+        GAS_SAVINGS: ${{ steps.audit.outputs.gas-savings }}
+        RISK_LEVEL: ${{ steps.audit.outputs.risk-level }}
+        SUMMARY_FILE: ${{ steps.audit.outputs.summary-file }}
+      with:
+        script: |
+          const fs = require('fs');
+
+          // Read summary file
+          let summary = { findings: [], gasOptimizations: [], summary: {} };
+          try {
+            const summaryPath = process.env.SUMMARY_FILE;
+            if (fs.existsSync(summaryPath)) {
+              summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+            }
+          } catch (e) {
+            console.log('Could not read summary file:', e.message);
+          }
+
+          const riskLevel = process.env.RISK_LEVEL;
+          const criticalCount = parseInt(process.env.CRITICAL_COUNT) || 0;
+          const highCount = parseInt(process.env.HIGH_COUNT) || 0;
+          const mediumCount = parseInt(process.env.MEDIUM_COUNT) || 0;
+          const findingsCount = parseInt(process.env.FINDINGS_COUNT) || 0;
+          const gasSavings = parseInt(process.env.GAS_SAVINGS) || 0;
+
+          // Determine badge
+          let badge, riskEmoji;
+          switch (riskLevel) {
+            case 'critical':
+              badge = '![Critical](https://img.shields.io/badge/Risk-CRITICAL-red)';
+              riskEmoji = '🔴 CRITICAL';
+              break;
+            case 'high':
+              badge = '![High](https://img.shields.io/badge/Risk-HIGH-orange)';
+              riskEmoji = '🟠 HIGH';
+              break;
+            case 'medium':
+              badge = '![Medium](https://img.shields.io/badge/Risk-MEDIUM-yellow)';
+              riskEmoji = '🟡 MEDIUM';
+              break;
+            case 'low':
+              badge = '![Low](https://img.shields.io/badge/Risk-LOW-green)';
+              riskEmoji = '🟢 LOW';
+              break;
+            default:
+              badge = '![Clean](https://img.shields.io/badge/Risk-CLEAN-brightgreen)';
+              riskEmoji = '✅ CLEAN';
+          }
+
+          // Build findings table
+          let findingsTable = '';
+          if (summary.findings && summary.findings.length > 0) {
+            findingsTable = `
+          | Severity | Title | Location | Detector |
+          |----------|-------|----------|----------|
+          `;
+            for (const f of summary.findings.slice(0, 20)) {
+              const severity = f.severity?.toUpperCase() || 'UNKNOWN';
+              const title = f.title || 'Unknown';
+              const location = f.location?.file ? `${f.location.file}:${f.location.lines?.[0] || '?'}` : 'Unknown';
+              const detector = f.detector || 'Unknown';
+              findingsTable += `| ${severity} | ${title} | ${location} | ${detector} |\n`;
+            }
+            if (summary.findings.length > 20) {
+              findingsTable += `\n_...and ${summary.findings.length - 20} more findings_\n`;
+            }
+          } else {
+            findingsTable = '_No security findings detected_';
+          }
+
+          // Build gas table
+          let gasTable = '';
+          if (summary.gasOptimizations && summary.gasOptimizations.length > 0) {
+            gasTable = `
+          | Severity | Optimization | Location |
+          |----------|--------------|----------|
+          `;
+            for (const g of summary.gasOptimizations.slice(0, 10)) {
+              const severity = g.severity?.toUpperCase() || 'INFO';
+              const title = g.title || 'Unknown';
+              const location = g.location?.file ? `${g.location.file}:${g.location.lines?.[0] || '?'}` : 'Unknown';
+              gasTable += `| ${severity} | ${title} | ${location} |\n`;
+            }
+            if (summary.gasOptimizations.length > 10) {
+              gasTable += `\n_...and ${summary.gasOptimizations.length - 10} more optimizations_\n`;
+            }
+          } else {
+            gasTable = '_No gas optimizations found_';
+          }
+
+          // Build comment body
+          const body = `## 🔍 Smart Contract Audit Report
+
+          ${badge}
+
+          **Risk Level:** ${riskEmoji}
+          **Findings:** ${criticalCount} critical, ${highCount} high, ${mediumCount} medium
+          **Gas Optimizations:** ${summary.gasOptimizations?.length || 0} suggestions (~${gasSavings} gas savings)
+
+          ---
+
+          <details>
+          <summary><strong>Security Findings (${findingsCount})</strong></summary>
+
+          ${findingsTable}
+
+          </details>
+
+          <details>
+          <summary><strong>Gas Optimizations (${summary.gasOptimizations?.length || 0})</strong></summary>
+
+          ${gasTable}
+
+          </details>
+
+          ---
+
+          <sub>🤖 Generated by [MCP Audit Server](https://github.com/anthropics/solidity-audit-mcp) | [View full report](${context.payload.pull_request.html_url}/checks)</sub>
+          `;
+
+          // Find existing comment
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const botComment = comments.find(c =>
+            c.user.type === 'Bot' &&
+            c.body.includes('🔍 Smart Contract Audit Report')
+          );
+
+          if (botComment) {
+            // Update existing comment
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+              body: body,
+            });
+            console.log('Updated existing comment');
+          } else {
+            // Create new comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });
+            console.log('Created new comment');
+          }
+
+    - name: Check threshold
+      if: ${{ inputs.fail-on-findings == 'true' }}
+      shell: bash
+      env:
+        SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
+        CRITICAL_COUNT: ${{ steps.audit.outputs.critical-count }}
+        HIGH_COUNT: ${{ steps.audit.outputs.high-count }}
+        MEDIUM_COUNT: ${{ steps.audit.outputs.medium-count }}
+        LOW_COUNT: ${{ steps.audit.outputs.low-count }}
+      run: |
+        FAIL=false
+
+        case "$SEVERITY_THRESHOLD" in
+          critical)
+            [ "$CRITICAL_COUNT" -gt 0 ] && FAIL=true
+            ;;
+          high)
+            [ "$CRITICAL_COUNT" -gt 0 ] || [ "$HIGH_COUNT" -gt 0 ] && FAIL=true
+            ;;
+          medium)
+            [ "$CRITICAL_COUNT" -gt 0 ] || [ "$HIGH_COUNT" -gt 0 ] || [ "$MEDIUM_COUNT" -gt 0 ] && FAIL=true
+            ;;
+          low)
+            [ "$CRITICAL_COUNT" -gt 0 ] || [ "$HIGH_COUNT" -gt 0 ] || [ "$MEDIUM_COUNT" -gt 0 ] || [ "$LOW_COUNT" -gt 0 ] && FAIL=true
+            ;;
+        esac
+
+        if [ "$FAIL" == "true" ]; then
+          echo "::error::Security findings detected above threshold ($SEVERITY_THRESHOLD)"
+          exit 1
+        fi
+
+        echo "No findings above threshold ($SEVERITY_THRESHOLD)"

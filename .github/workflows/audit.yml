@@ -1,0 +1,132 @@
+name: Smart Contract Audit
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "src/**/*.sol"
+      - "**.sol"
+  push:
+    branches:
+      - main
+    paths:
+      - "contracts/**"
+      - "src/**/*.sol"
+      - "**.sol"
+  workflow_dispatch:
+    inputs:
+      contracts-path:
+        description: "Path to contracts directory"
+        required: false
+        default: "contracts/"
+      severity-threshold:
+        description: "Minimum severity to fail (critical, high, medium, low)"
+        required: false
+        default: "high"
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required for diff analysis
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install audit tools
+        run: |
+          # Install Slither
+          pip install slither-analyzer
+          echo "Slither version: $(slither --version)"
+
+          # Install Foundry
+          curl -L https://foundry.paradigm.xyz | bash
+          source ~/.bashrc || true
+          ~/.foundry/bin/foundryup
+          echo "$HOME/.foundry/bin" >> $GITHUB_PATH
+
+          # Install Aderyn (optional, may fail on some systems)
+          curl -L https://raw.githubusercontent.com/Cyfrin/aderyn/dev/cyfrinup/install | bash || true
+          echo "$HOME/.cyfrin/bin" >> $GITHUB_PATH
+
+      - name: Run Audit
+        uses: ./.github/actions/audit
+        id: audit
+        with:
+          contracts-path: ${{ github.event.inputs.contracts-path || 'contracts/' }}
+          severity-threshold: ${{ github.event.inputs.severity-threshold || 'high' }}
+          include-gas: "true"
+          diff-only: ${{ github.event_name == 'pull_request' }}
+          comment-on-pr: ${{ github.event_name == 'pull_request' }}
+          fail-on-findings: "true"
+          sarif-output: "true"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SARIF results
+        if: always() && steps.audit.outputs.sarif-file != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.audit.outputs.sarif-file }}
+        continue-on-error: true
+
+      - name: Print Summary
+        if: always()
+        run: |
+          echo "## Audit Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Risk Level | ${{ steps.audit.outputs.risk-level }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Critical | ${{ steps.audit.outputs.critical-count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| High | ${{ steps.audit.outputs.high-count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Medium | ${{ steps.audit.outputs.medium-count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Findings | ${{ steps.audit.outputs.findings-count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Est. Gas Savings | ${{ steps.audit.outputs.gas-savings }} |" >> $GITHUB_STEP_SUMMARY
+
+  # Optional: Run on schedule for continuous monitoring
+  scheduled-audit:
+    name: Scheduled Full Audit
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install audit tools
+        run: |
+          pip install slither-analyzer
+          curl -L https://foundry.paradigm.xyz | bash
+          ~/.foundry/bin/foundryup
+          echo "$HOME/.foundry/bin" >> $GITHUB_PATH
+
+      - name: Run Full Audit
+        uses: ./.github/actions/audit
+        with:
+          contracts-path: "contracts/"
+          severity-threshold: "medium"
+          include-gas: "true"
+          diff-only: "false"
+          comment-on-pr: "false"
+          fail-on-findings: "false"
+          sarif-output: "true"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

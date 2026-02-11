@@ -1,0 +1,138 @@
+# =============================================================================
+# MCP Audit Server - SaaS Deployment
+# =============================================================================
+# Run as a remote service that MCP clients can connect to via SSE
+#
+# Quick Start (from project root):
+#   1. cp .env.example .env
+#   2. Edit .env and set MCP_API_KEY (optional but recommended)
+#   3. docker-compose -f docker/docker-compose.saas.yml up -d
+#
+# Then configure your MCP client to connect to:
+#   http://localhost:3000/sse
+# =============================================================================
+
+services:
+  solidity-audit-saas:
+    build:
+      context: ..
+      dockerfile: Dockerfile.saas
+    container_name: solidity-audit-saas
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - ../.env
+    environment:
+      # These can be overridden by .env file
+      - NODE_ENV=${NODE_ENV:-production}
+      - MCP_AUDIT_LOG_LEVEL=${MCP_AUDIT_LOG_LEVEL:-info}
+      - PORT=${PORT:-3000}
+      - HOST=${HOST:-0.0.0.0}
+      - MCP_API_KEY=${MCP_API_KEY:-}
+    volumes:
+      # Mount contracts directory for analysis
+      - ../contracts:/contracts:ro
+      # Mount workspace for full project analysis
+      - ../:/workspace:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: Nginx reverse proxy with SSL
+  nginx:
+    image: nginx:alpine
+    container_name: solidity-audit-nginx
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ../nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../certs:/etc/nginx/certs:ro
+    depends_on:
+      - solidity-audit-saas
+    profiles:
+      - with-ssl
+    restart: unless-stopped
+
+# =============================================================================
+# Deployment Examples
+# =============================================================================
+#
+# 1. Setup (first time):
+#    cp .env.example .env
+#    # Edit .env to set MCP_API_KEY if desired
+#
+# 2. Simple deployment:
+#    docker-compose -f docker/docker-compose.saas.yml up -d
+#
+# 3. With API key (inline, without .env):
+#    MCP_API_KEY=your-secret-key docker-compose -f docker/docker-compose.saas.yml up -d
+#
+# 4. Generate secure API key:
+#    openssl rand -hex 32
+#
+# 5. Custom port:
+#    PORT=8080 docker-compose -f docker/docker-compose.saas.yml up -d
+#
+# 6. With SSL (requires nginx.conf and certs):
+#    docker-compose -f docker/docker-compose.saas.yml --profile with-ssl up -d
+#
+# 7. View logs:
+#    docker-compose -f docker/docker-compose.saas.yml logs -f
+#
+# 8. Check health:
+#    curl http://localhost:3000/health
+#
+# =============================================================================
+# MCP Client Configuration
+# =============================================================================
+#
+# For Claude Desktop or other MCP clients, use SSE transport:
+#
+# WITHOUT authentication:
+# {
+#   "mcpServers": {
+#     "audit": {
+#       "transport": {
+#         "type": "sse",
+#         "url": "http://localhost:3000/sse"
+#       }
+#     }
+#   }
+# }
+#
+# WITH API key authentication:
+# {
+#   "mcpServers": {
+#     "audit": {
+#       "transport": {
+#         "type": "sse",
+#         "url": "http://your-server:3000/sse",
+#         "headers": {
+#           "X-API-Key": "your-secret-key"
+#         }
+#       }
+#     }
+#   }
+# }
+#
+# WITH Bearer token authentication:
+# {
+#   "mcpServers": {
+#     "audit": {
+#       "transport": {
+#         "type": "sse",
+#         "url": "http://your-server:3000/sse",
+#         "headers": {
+#           "Authorization": "Bearer your-secret-key"
+#         }
+#       }
+#     }
+#   }
+# }
+#
+# =============================================================================

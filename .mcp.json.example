@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "audit": {
+      "command": "node",
+      "args": ["/path/to/mcp-audit-server/dist/index.js"],
+      "env": {
+        "REPORT_FORMAT": "markdown",
+        "SEVERITY_THRESHOLD": "low",
+        "TIMEOUT": "180"
+      }
+    }
+  }
+}

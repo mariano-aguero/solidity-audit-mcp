@@ -1,0 +1,91 @@
+# =============================================================================
+# MCP Audit Server - Docker Compose
+# =============================================================================
+# Usage (from project root):
+#   docker-compose -f docker/docker-compose.yml up -d
+#   docker-compose -f docker/docker-compose.yml run cli
+#   docker-compose -f docker/docker-compose.yml down
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # MCP Server (stdio transport for Claude Desktop)
+  # ---------------------------------------------------------------------------
+  mcp-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: solidity-audit-mcp
+    volumes:
+      # Mount your contracts directory
+      - ../contracts:/contracts:ro
+      # Mount project for foundry projects
+      - ../:/workspace:ro
+    environment:
+      - NODE_ENV=production
+      - MCP_AUDIT_LOG_LEVEL=info
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # CLI Service (for running audits directly)
+  # ---------------------------------------------------------------------------
+  cli:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    volumes:
+      - ../contracts:/contracts
+      - ../:/workspace
+    environment:
+      - NODE_ENV=production
+    entrypoint: ["node", "dist/cli.js"]
+    profiles:
+      - cli
+
+  # ---------------------------------------------------------------------------
+  # Development Service (with source mounted)
+  # ---------------------------------------------------------------------------
+  dev:
+    build:
+      context: ..
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ..:/app
+      - /app/node_modules
+      - ../contracts:/contracts
+    environment:
+      - NODE_ENV=development
+      - MCP_AUDIT_LOG_LEVEL=debug
+    stdin_open: true
+    tty: true
+    profiles:
+      - dev
+
+# =============================================================================
+# Example Usage:
+# =============================================================================
+#
+# 1. Build and start MCP server:
+#    docker-compose up -d mcp-server
+#
+# 2. Run CLI audit:
+#    docker-compose run --rm cli analyze /contracts/MyContract.sol
+#
+# 3. Run CLI with project root:
+#    docker-compose run --rm cli analyze /workspace/src/Contract.sol --project-root /workspace
+#
+# 4. View logs:
+#    docker-compose logs -f mcp-server
+#
+# 5. For Claude Desktop integration, add to config:
+#    {
+#      "mcpServers": {
+#        "audit": {
+#          "command": "docker",
+#          "args": ["exec", "-i", "solidity-audit-mcp", "node", "dist/index.js"]
+#        }
+#      }
+#    }
+# =============================================================================

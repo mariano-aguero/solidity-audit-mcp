@@ -1,0 +1,492 @@
+/**
+ * GitHub PR Comment Generator
+ *
+ * Generates formatted markdown comments for GitHub Pull Requests
+ * with audit results, and posts/updates comments via GitHub API.
+ */
+
+import { Finding, Severity } from "../types/index.js";
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface AuditSummary {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  informational: number;
+  gasOptimizations: number;
+  estimatedGasSavings: number;
+}
+
+export interface AuditResults {
+  summary: AuditSummary;
+  findings: Finding[];
+  gasOptimizations: Finding[];
+  diffResults?: DiffResults;
+}
+
+export interface DiffResults {
+  addedFindings: Finding[];
+  resolvedFindings: Finding[];
+  unchangedFindings: Finding[];
+}
+
+export type RiskLevel = "critical" | "high" | "medium" | "low" | "clean";
+
+export interface CommentOptions {
+  owner: string;
+  repo: string;
+  prNumber: number;
+  token: string;
+  prUrl?: string;
+}
+
+// ============================================================================
+// Risk Level Detection
+// ============================================================================
+
+/**
+ * Determine the overall risk level based on findings.
+ */
+export function determineRiskLevel(summary: AuditSummary): RiskLevel {
+  if (summary.critical > 0) return "critical";
+  if (summary.high > 0) return "high";
+  if (summary.medium > 0) return "medium";
+  if (summary.low > 0) return "low";
+  return "clean";
+}
+
+/**
+ * Get the badge URL for a risk level.
+ */
+export function getRiskBadge(riskLevel: RiskLevel): string {
+  const badges: Record<RiskLevel, string> = {
+    critical: "![Critical](https://img.shields.io/badge/Risk-CRITICAL-red)",
+    high: "![High](https://img.shields.io/badge/Risk-HIGH-orange)",
+    medium: "![Medium](https://img.shields.io/badge/Risk-MEDIUM-yellow)",
+    low: "![Low](https://img.shields.io/badge/Risk-LOW-green)",
+    clean: "![Clean](https://img.shields.io/badge/Risk-CLEAN-brightgreen)",
+  };
+  return badges[riskLevel];
+}
+
+/**
+ * Get the emoji and label for a risk level.
+ */
+export function getRiskEmoji(riskLevel: RiskLevel): string {
+  const emojis: Record<RiskLevel, string> = {
+    critical: "🔴 CRITICAL",
+    high: "🟠 HIGH",
+    medium: "🟡 MEDIUM",
+    low: "🟢 LOW",
+    clean: "✅ CLEAN",
+  };
+  return emojis[riskLevel];
+}
+
+/**
+ * Get the emoji for a severity level.
+ */
+export function getSeverityEmoji(severity: Severity): string {
+  const emojis: Record<Severity, string> = {
+    [Severity.CRITICAL]: "🔴",
+    [Severity.HIGH]: "🟠",
+    [Severity.MEDIUM]: "🟡",
+    [Severity.LOW]: "🟢",
+    [Severity.INFORMATIONAL]: "🔵",
+  };
+  return emojis[severity] ?? "⚪";
+}
+
+// ============================================================================
+// Markdown Generation
+// ============================================================================
+
+/**
+ * Generate a markdown table for security findings.
+ */
+export function generateFindingsTable(findings: Finding[], maxItems = 20): string {
+  if (findings.length === 0) {
+    return "_No security findings detected_";
+  }
+
+  const lines: string[] = [
+    "| Severity | Title | Location | Detector |",
+    "|:--------:|-------|----------|----------|",
+  ];
+
+  const displayFindings = findings.slice(0, maxItems);
+  for (const finding of displayFindings) {
+    const emoji = getSeverityEmoji(finding.severity);
+    const severity = `${emoji} ${finding.severity.toUpperCase()}`;
+    const title = escapeMarkdown(finding.title);
+    const location = finding.location.file
+      ? `\`${finding.location.file}:${finding.location.lines?.[0] ?? "?"}\``
+      : "_Unknown_";
+    const detector = `\`${finding.detector}\``;
+    lines.push(`| ${severity} | ${title} | ${location} | ${detector} |`);
+  }
+
+  if (findings.length > maxItems) {
+    lines.push("");
+    lines.push(`_...and ${findings.length - maxItems} more findings_`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Generate a markdown table for gas optimizations.
+ */
+export function generateGasTable(optimizations: Finding[], maxItems = 10): string {
+  if (optimizations.length === 0) {
+    return "_No gas optimizations found_";
+  }
+
+  const lines: string[] = [
+    "| Impact | Optimization | Location | Est. Savings |",
+    "|:------:|--------------|----------|-------------:|",
+  ];
+
+  const displayOptimizations = optimizations.slice(0, maxItems);
+  for (const opt of displayOptimizations) {
+    const emoji = getSeverityEmoji(opt.severity);
+    const impact = `${emoji} ${opt.severity.toUpperCase()}`;
+    const title = escapeMarkdown(opt.title);
+    const location = opt.location.file
+      ? `\`${opt.location.file}:${opt.location.lines?.[0] ?? "?"}\``
+      : "_Unknown_";
+    // Estimate savings based on severity
+    const savings = estimateGasSavings(opt.severity);
+    lines.push(`| ${impact} | ${title} | ${location} | ~${savings} gas |`);
+  }
+
+  if (optimizations.length > maxItems) {
+    lines.push("");
+    lines.push(`_...and ${optimizations.length - maxItems} more optimizations_`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Generate a markdown section for diff analysis results.
+ */
+export function generateDiffSection(diffResults: DiffResults): string {
+  const lines: string[] = [];
+
+  // Added findings (new issues in this PR)
+  if (diffResults.addedFindings.length > 0) {
+    lines.push("### ⚠️ New Issues Introduced");
+    lines.push("");
+    lines.push(generateFindingsTable(diffResults.addedFindings, 10));
+    lines.push("");
+  }
+
+  // Resolved findings (issues fixed in this PR)
+  if (diffResults.resolvedFindings.length > 0) {
+    lines.push("### ✅ Issues Resolved");
+    lines.push("");
+    lines.push(
+      `This PR resolves **${diffResults.resolvedFindings.length}** existing issue${diffResults.resolvedFindings.length === 1 ? "" : "s"}:`
+    );
+    lines.push("");
+    for (const finding of diffResults.resolvedFindings.slice(0, 5)) {
+      lines.push(`- ~~${finding.title}~~ (${finding.severity})`);
+    }
+    if (diffResults.resolvedFindings.length > 5) {
+      lines.push(`- _...and ${diffResults.resolvedFindings.length - 5} more_`);
+    }
+    lines.push("");
+  }
+
+  // Summary
+  if (diffResults.addedFindings.length === 0 && diffResults.resolvedFindings.length === 0) {
+    lines.push("_No changes in security findings compared to base branch_");
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Generate the full PR comment markdown.
+ */
+export function generatePRComment(results: AuditResults, prUrl?: string): string {
+  const riskLevel = determineRiskLevel(results.summary);
+  const badge = getRiskBadge(riskLevel);
+  const riskEmoji = getRiskEmoji(riskLevel);
+
+  const totalFindings =
+    results.summary.critical +
+    results.summary.high +
+    results.summary.medium +
+    results.summary.low +
+    results.summary.informational;
+
+  const lines: string[] = [];
+
+  // Header
+  lines.push("## 🔍 Smart Contract Audit Report");
+  lines.push("");
+  lines.push(badge);
+  lines.push("");
+
+  // Summary metrics
+  lines.push(`**Risk Level:** ${riskEmoji}`);
+  lines.push(
+    `**Findings:** ${results.summary.critical} critical, ${results.summary.high} high, ${results.summary.medium} medium`
+  );
+  lines.push(
+    `**Gas Optimizations:** ${results.gasOptimizations.length} suggestions (~${results.summary.estimatedGasSavings} gas savings)`
+  );
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+
+  // Diff results (if available)
+  if (results.diffResults) {
+    lines.push("<details>");
+    lines.push("<summary><strong>📊 Changes in This PR</strong></summary>");
+    lines.push("");
+    lines.push(generateDiffSection(results.diffResults));
+    lines.push("");
+    lines.push("</details>");
+    lines.push("");
+  }
+
+  // Security findings
+  lines.push("<details>");
+  lines.push(`<summary><strong>🛡️ Security Findings (${totalFindings})</strong></summary>`);
+  lines.push("");
+  lines.push(generateFindingsTable(results.findings));
+  lines.push("");
+  lines.push("</details>");
+  lines.push("");
+
+  // Gas optimizations
+  lines.push("<details>");
+  lines.push(
+    `<summary><strong>⛽ Gas Optimizations (${results.gasOptimizations.length})</strong></summary>`
+  );
+  lines.push("");
+  lines.push(generateGasTable(results.gasOptimizations));
+  lines.push("");
+  lines.push("</details>");
+  lines.push("");
+
+  // Breakdown by severity
+  lines.push("<details>");
+  lines.push("<summary><strong>📈 Severity Breakdown</strong></summary>");
+  lines.push("");
+  lines.push("| Severity | Count |");
+  lines.push("|:---------|------:|");
+  lines.push(`| 🔴 Critical | ${results.summary.critical} |`);
+  lines.push(`| 🟠 High | ${results.summary.high} |`);
+  lines.push(`| 🟡 Medium | ${results.summary.medium} |`);
+  lines.push(`| 🟢 Low | ${results.summary.low} |`);
+  lines.push(`| 🔵 Informational | ${results.summary.informational} |`);
+  lines.push(`| **Total** | **${totalFindings}** |`);
+  lines.push("");
+  lines.push("</details>");
+  lines.push("");
+
+  // Footer
+  lines.push("---");
+  lines.push("");
+  const checksUrl = prUrl ? `${prUrl}/checks` : "#";
+  lines.push(
+    `<sub>🤖 Generated by [MCP Audit Server](https://github.com/anthropics/solidity-audit-mcp) | [View full report](${checksUrl})</sub>`
+  );
+
+  return lines.join("\n");
+}
+
+// ============================================================================
+// GitHub API Integration
+// ============================================================================
+
+const COMMENT_SIGNATURE = "🔍 Smart Contract Audit Report";
+
+/**
+ * Post or update a PR comment with audit results.
+ */
+export async function postPRComment(
+  results: AuditResults,
+  options: CommentOptions
+): Promise<{ commentId: number; updated: boolean }> {
+  const { owner, repo, prNumber, token, prUrl } = options;
+
+  const commentBody = generatePRComment(results, prUrl);
+
+  // Find existing comment
+  const existingComment = await findExistingComment(owner, repo, prNumber, token);
+
+  if (existingComment) {
+    // Update existing comment
+    await updateComment(owner, repo, existingComment.id, commentBody, token);
+    return { commentId: existingComment.id, updated: true };
+  } else {
+    // Create new comment
+    const newComment = await createComment(owner, repo, prNumber, commentBody, token);
+    return { commentId: newComment.id, updated: false };
+  }
+}
+
+/**
+ * Find an existing audit comment on the PR.
+ */
+async function findExistingComment(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  token: string
+): Promise<{ id: number } | null> {
+  const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "solidity-audit-mcp",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch comments: ${response.status} ${response.statusText}`);
+  }
+
+  const comments = (await response.json()) as Array<{
+    id: number;
+    body: string;
+    user: { type: string };
+  }>;
+
+  // Find our comment by signature
+  const ourComment = comments.find(
+    (c) => c.user.type === "Bot" && c.body.includes(COMMENT_SIGNATURE)
+  );
+
+  return ourComment ? { id: ourComment.id } : null;
+}
+
+/**
+ * Create a new comment on the PR.
+ */
+async function createComment(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  body: string,
+  token: string
+): Promise<{ id: number }> {
+  const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "solidity-audit-mcp",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ body }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to create comment: ${response.status} ${response.statusText}`);
+  }
+
+  const data = (await response.json()) as { id: number };
+  return { id: data.id };
+}
+
+/**
+ * Update an existing comment.
+ */
+async function updateComment(
+  owner: string,
+  repo: string,
+  commentId: number,
+  body: string,
+  token: string
+): Promise<void> {
+  const url = `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}`;
+
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "solidity-audit-mcp",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ body }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to update comment: ${response.status} ${response.statusText}`);
+  }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Escape markdown special characters.
+ */
+function escapeMarkdown(text: string): string {
+  return text.replace(/[|`*_{}[\]()#+\-.!]/g, "\\$&").substring(0, 80);
+}
+
+/**
+ * Estimate gas savings based on severity.
+ */
+function estimateGasSavings(severity: Severity): number {
+  const estimates: Record<Severity, number> = {
+    [Severity.CRITICAL]: 5000,
+    [Severity.HIGH]: 2000,
+    [Severity.MEDIUM]: 500,
+    [Severity.LOW]: 100,
+    [Severity.INFORMATIONAL]: 50,
+  };
+  return estimates[severity] ?? 100;
+}
+
+/**
+ * Create an AuditResults object from raw findings.
+ */
+export function createAuditResults(
+  findings: Finding[],
+  gasOptimizations: Finding[],
+  diffResults?: DiffResults
+): AuditResults {
+  const summary: AuditSummary = {
+    critical: findings.filter((f) => f.severity === Severity.CRITICAL).length,
+    high: findings.filter((f) => f.severity === Severity.HIGH).length,
+    medium: findings.filter((f) => f.severity === Severity.MEDIUM).length,
+    low: findings.filter((f) => f.severity === Severity.LOW).length,
+    informational: findings.filter((f) => f.severity === Severity.INFORMATIONAL).length,
+    gasOptimizations: gasOptimizations.length,
+    estimatedGasSavings: gasOptimizations.reduce(
+      (sum, opt) => sum + estimateGasSavings(opt.severity),
+      0
+    ),
+  };
+
+  return {
+    summary,
+    findings,
+    gasOptimizations,
+    diffResults,
+  };
+}
+
+// ============================================================================
+// Exports
+// ============================================================================
+
+export { generatePRComment as generateComment, postPRComment as postComment };

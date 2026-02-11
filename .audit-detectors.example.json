@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "extends": ["web3"],
+  "detectors": [
+    {
+      "id": "project-specific-rule",
+      "title": "Project Specific Check",
+      "description": "Example of a project-specific custom detector that runs alongside preset detectors",
+      "severity": "LOW",
+      "type": "regex",
+      "pattern": "YOUR_PATTERN_HERE",
+      "recommendation": "Your recommendation here"
+    },
+    {
+      "id": "no-hardcoded-addresses",
+      "title": "Hardcoded Address (Custom Override)",
+      "description": "This overrides the preset detector with the same ID - useful for customizing severity or patterns for your project",
+      "severity": "MEDIUM",
+      "type": "regex",
+      "pattern": "0x[a-fA-F0-9]{40}",
+      "exclude": ["test/", "script/", "mocks/"],
+      "recommendation": "Use immutable variables or constructor parameters for addresses"
+    }
+  ]
+}

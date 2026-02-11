@@ -1,0 +1,18 @@
+# Render.com deployment configuration
+services:
+  - type: web
+    name: solidity-audit-mcp
+    env: docker
+    dockerfilePath: ./Dockerfile.saas
+    dockerContext: .
+    plan: free  # or starter ($7/month) for more resources
+    healthCheckPath: /health/quick
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: NODE_ENV
+        value: production
+      - key: MCP_API_KEY
+        generateValue: true  # Auto-generate secure key
+      - key: MCP_AUDIT_LOG_LEVEL
+        value: info

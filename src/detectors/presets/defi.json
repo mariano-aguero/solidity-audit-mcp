@@ -1,0 +1,103 @@
+{
+  "name": "defi",
+  "description": "Security detectors for DeFi protocols - covers common attack vectors and vulnerabilities",
+  "version": "1.0.0",
+  "detectors": [
+    {
+      "id": "oracle-manipulation",
+      "title": "Potential Oracle Manipulation - Spot Price Usage",
+      "description": "Using spot prices from DEX pools (getReserves, balanceOf) without time-weighted averaging (TWAP) is vulnerable to flash loan manipulation. Attackers can manipulate pool ratios within a single transaction to exploit price-dependent logic.",
+      "severity": "HIGH",
+      "type": "regex",
+      "pattern": "(getReserves\\s*\\(|spot[Pp]rice|getAmountOut\\s*\\([^)]*\\)|token[01]\\.balanceOf\\s*\\(\\s*address\\s*\\(\\s*pair)",
+      "recommendation": "Use Chainlink oracles or implement TWAP (Time-Weighted Average Price) with sufficient observation window (e.g., 30 minutes). Never rely on single-block spot prices for critical calculations like liquidations or collateral valuation."
+    },
+    {
+      "id": "flash-loan-risk",
+      "title": "Flash Loan Attack Vector",
+      "description": "Function reads token balance and performs critical operations in the same transaction without flash loan protection. Attackers can use flash loans to temporarily inflate balances and exploit the logic.",
+      "severity": "HIGH",
+      "type": "regex",
+      "pattern": "(balanceOf\\s*\\(\\s*address\\s*\\(\\s*this\\s*\\)\\s*\\).*(?:transfer|mint|burn|withdraw|deposit|swap)|(?:transfer|mint|burn|withdraw|deposit|swap).*balanceOf\\s*\\(\\s*address\\s*\\(\\s*this\\s*\\)\\s*\\))",
+      "multiline": true,
+      "recommendation": "Implement flash loan guards: 1) Use share-based accounting instead of balanceOf, 2) Add reentrancy guards, 3) Implement minimum lock time, 4) Use before/after balance deltas instead of absolute balances."
+    },
+    {
+      "id": "slippage-check",
+      "title": "Missing Slippage Protection",
+      "description": "Swap or exchange operations without minimum output amount (minAmountOut) or maximum input amount (maxAmountIn) parameters are vulnerable to sandwich attacks and MEV extraction.",
+      "severity": "HIGH",
+      "type": "regex",
+      "pattern": "(swap|exchange|swapExact)\\w*\\s*\\([^)]*\\)(?![^{]*(?:min|minimum|slippage|deadline))",
+      "recommendation": "Always include slippage protection: 1) Add minAmountOut/maxAmountIn parameters, 2) Implement deadline checks, 3) Consider using private mempools or MEV protection services for sensitive transactions."
+    },
+    {
+      "id": "reentrancy-erc777",
+      "title": "ERC777 Reentrancy Risk",
+      "description": "ERC777 tokens have send/receive hooks that can be exploited for reentrancy attacks. Functions handling ERC777 tokens must follow checks-effects-interactions pattern and use reentrancy guards.",
+      "severity": "HIGH",
+      "type": "regex",
+      "pattern": "(IERC777|ERC777|tokensReceived|tokensToSend|_callTokensReceived|_callTokensToSend|implementer.*777)",
+      "recommendation": "When handling ERC777 tokens: 1) Always use ReentrancyGuard, 2) Follow checks-effects-interactions pattern, 3) Update state before external calls, 4) Consider using ERC20 wrapper contracts for ERC777 tokens."
+    },
+    {
+      "id": "donation-attack",
+      "title": "Donation Attack Vector - Balance-Based Share Calculation",
+      "description": "Contracts that use balanceOf(address(this)) to calculate shares or exchange rates are vulnerable to donation attacks. Attackers can donate tokens directly to inflate the balance and manipulate share calculations.",
+      "severity": "HIGH",
+      "type": "regex",
+      "pattern": "(balanceOf\\s*\\(\\s*address\\s*\\(\\s*this\\s*\\)\\s*\\)\\s*[/\\*]|[/\\*]\\s*balanceOf\\s*\\(\\s*address\\s*\\(\\s*this\\s*\\)\\s*\\)|totalAssets.*balanceOf|shares.*balanceOf\\s*\\(\\s*address\\s*\\(\\s*this)",
+      "multiline": true,
+      "recommendation": "Use internal accounting instead of balanceOf: 1) Track deposits/withdrawals with internal variables, 2) Use virtual balance that ignores direct transfers, 3) Implement minimum deposit requirements to make attacks unprofitable, 4) Use ERC4626 with proper virtual offset."
+    },
+    {
+      "id": "precision-loss",
+      "title": "Precision Loss in Division",
+      "description": "Division before multiplication can lead to precision loss, especially with integer arithmetic. This can cause rounding errors that accumulate over time or be exploited.",
+      "severity": "MEDIUM",
+      "type": "regex",
+      "pattern": "\\w+\\s*/\\s*\\w+\\s*\\*\\s*\\w+(?!\\s*/)",
+      "recommendation": "Always multiply before dividing: (a * b) / c instead of (a / c) * b. Use higher precision intermediate values and consider using fixed-point math libraries like PRBMath or ABDKMath."
+    },
+    {
+      "id": "price-stale-check",
+      "title": "Missing Oracle Staleness Check",
+      "description": "Chainlink oracle responses should be checked for staleness. Using stale prices can lead to incorrect liquidations, unfair trades, or exploitable arbitrage opportunities.",
+      "severity": "HIGH",
+      "type": "regex",
+      "pattern": "latestRoundData\\s*\\(\\s*\\)(?![\\s\\S]{0,200}updatedAt)",
+      "multiline": true,
+      "recommendation": "Always check oracle freshness: require(block.timestamp - updatedAt < MAX_STALENESS, \"Stale price\"). Also verify answeredInRound >= roundId and handle sequencer downtime for L2s."
+    },
+    {
+      "id": "unchecked-transfer",
+      "title": "Unchecked ERC20 Transfer Return Value",
+      "description": "Some ERC20 tokens (like USDT) don't return a boolean on transfer/transferFrom. Using the return value without SafeERC20 can lead to silent failures.",
+      "severity": "MEDIUM",
+      "type": "regex",
+      "pattern": "(?<!safe)[Tt]ransfer(From)?\\s*\\([^)]+\\)\\s*;(?!\\s*//.*safe)",
+      "recommendation": "Use OpenZeppelin's SafeERC20 library: safeTransfer and safeTransferFrom handle non-standard tokens correctly. Import and use: using SafeERC20 for IERC20;"
+    },
+    {
+      "id": "front-running-vulnerable",
+      "title": "Front-Running Vulnerability",
+      "description": "Functions that reveal valuable information or can be profitably front-run should implement protection mechanisms.",
+      "severity": "MEDIUM",
+      "type": "regex",
+      "pattern": "(function\\s+(reveal|claim|redeem|settle|execute|finalize)\\w*\\s*\\([^)]*\\)\\s*(external|public))",
+      "recommendation": "Implement front-running protection: 1) Commit-reveal schemes, 2) Use private mempools (Flashbots), 3) Add minimum time delays, 4) Implement submarine sends for sensitive reveals."
+    },
+    {
+      "id": "liquidity-removal-risk",
+      "title": "Unrestricted Liquidity Removal",
+      "description": "Functions that allow removing liquidity or withdrawing significant funds without timelock or restrictions can enable rug pulls.",
+      "severity": "MEDIUM",
+      "type": "ast-pattern",
+      "match": {
+        "hasModifier": "onlyOwner",
+        "modifiesState": true
+      },
+      "recommendation": "Implement safeguards: 1) Timelock delays for large withdrawals, 2) Maximum withdrawal limits per period, 3) Multi-sig requirements, 4) Vesting schedules for protocol-owned liquidity."
+    }
+  ]
+}
