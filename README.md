@@ -7,6 +7,188 @@
 
 A Model Context Protocol (MCP) server for automated security analysis of Solidity smart contracts. Integrates with industry-standard tools like Slither and Aderyn, plus built-in pattern matching against the SWC Registry.
 
+## Quick Start: Add Auditing to Your Project
+
+Add automated security audits to any Solidity project in 2 minutes:
+
+### 1. Copy the workflow to your project
+
+Create `.github/workflows/audit.yml` in your Solidity project:
+
+```yaml
+name: Smart Contract Audit
+
+on:
+  pull_request:
+    paths: ["**.sol"]
+  push:
+    branches: [main]
+    paths: ["**.sol"]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+  checks: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install audit tools
+        run: |
+          pip install slither-analyzer
+          curl -L https://foundry.paradigm.xyz | bash
+          ~/.foundry/bin/foundryup
+          echo "$HOME/.foundry/bin" >> $GITHUB_PATH
+          npm install -g solidity-audit-mcp
+
+      - name: Run Audit
+        run: |
+          audit-cli audit contracts/ --format markdown
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+### 2. That's it!
+
+Every PR that touches `.sol` files will be automatically audited.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        YOUR PROJECT                                 │
+│                  (e.g., smart-contract-audit-example)               │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  1. You modify Token.sol and create a PR                            │
+│                                                                     │
+│  2. GitHub triggers the audit workflow                              │
+│                                                                     │
+│  3. MCP Audit Server runs ALL analyzers on changed .sol files       │
+│     (Slither, Aderyn, Slang AST, SWC patterns, Gas optimizer)       │
+│                                                                     │
+│  4. Results appear directly in your PR:                             │
+│     ├── ✓ Inline annotations on problematic lines                   │
+│     ├── ✓ Summary comment with all findings                         │
+│     ├── ✓ Check status (pass/fail based on severity)                │
+│     └── ✓ Security tab integration (SARIF)                          │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### What You See in the PR
+
+**Inline annotations on each vulnerable line:**
+
+```solidity
+function withdraw(uint256 amount) external {
+    require(balances[msg.sender] >= amount);
+
+    (bool success, ) = msg.sender.call{value: amount}("");
+    // ▲ 🟠 HIGH: Reentrancy vulnerability
+    // │  State change after external call allows reentrancy attack.
+    // │  Recommendation: Use checks-effects-interactions pattern.
+    // └─ Detector: slither
+
+    require(success);
+    balances[msg.sender] -= amount;  // ← State change should be BEFORE the call
+}
+```
+
+**PR comment with full report:**
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  🔍 Smart Contract Audit Report                            │
+│                                                            │
+│  Risk Level: 🟠 HIGH                                       │
+│  Findings: 0 critical, 2 high, 3 medium                    │
+│  Gas Optimizations: 5 suggestions (~500 gas savings)       │
+│                                                            │
+│  ┌──────────┬─────────────────────┬─────────────┬───────┐  │
+│  │ Severity │ Title               │ Location    │ Tool  │  │
+│  ├──────────┼─────────────────────┼─────────────┼───────┤  │
+│  │ HIGH     │ Reentrancy          │ Token.sol:45│slither│  │
+│  │ HIGH     │ Unprotected withdraw│ Token.sol:32│aderyn │  │
+│  │ MEDIUM   │ Floating pragma     │ Token.sol:1 │slang  │  │
+│  └──────────┴─────────────────────┴─────────────┴───────┘  │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Check status on the PR:**
+- 🔴 **Failed** - If critical or high severity findings exist
+- 🟢 **Passed** - If no findings above your configured threshold
+
+### Optional: On-Demand Audits via Issues
+
+Want to trigger audits by creating an issue or comment? Add `.github/workflows/audit-on-demand.yml`:
+
+```yaml
+name: On-Demand Audit
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    if: contains(github.event.issue.title, 'audit') || contains(github.event.comment.body, 'audit')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: |
+          pip install slither-analyzer
+          npm install -g solidity-audit-mcp
+
+      - name: Run Audit
+        id: audit
+        run: |
+          audit-cli audit contracts/ --format markdown > report.md
+
+      - name: Post Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('report.md', 'utf8');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: report
+            });
+```
+
+Now create an issue with "audit" in the title, and get a full security report as a comment.
+
+---
+
 ## What It Does
 
 The Solidity Audit MCP provides AI assistants (like Claude) with the ability to perform comprehensive security audits on Solidity smart contracts. It combines multiple analysis approaches:

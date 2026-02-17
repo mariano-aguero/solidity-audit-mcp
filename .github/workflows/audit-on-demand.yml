@@ -1,0 +1,297 @@
+name: On-Demand Audit (Issue/Comment)
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  checks: write
+
+jobs:
+  check-trigger:
+    name: Check if audit requested
+    runs-on: ubuntu-latest
+    outputs:
+      should_audit: ${{ steps.check.outputs.should_audit }}
+      contracts_path: ${{ steps.check.outputs.contracts_path }}
+    steps:
+      - name: Check for audit trigger
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue?.body || context.payload.comment?.body || '';
+            const title = context.payload.issue?.title || '';
+
+            // Trigger keywords (case insensitive)
+            const triggerPatterns = [
+              /audit/i,
+              /security\s*(check|review|scan)/i,
+              /vulnerability\s*(check|scan)/i,
+              /analizar?\s*contrato/i,
+              /revisar?\s*seguridad/i,
+            ];
+
+            const textToCheck = `${title} ${body}`;
+            const shouldAudit = triggerPatterns.some(pattern => pattern.test(textToCheck));
+
+            // Extract contracts path if specified
+            const pathMatch = body.match(/contracts?\s*(?:path|dir|directory)?[:\s]+[`"]?([^\s`"]+)[`"]?/i);
+            const contractsPath = pathMatch ? pathMatch[1] : 'contracts/';
+
+            console.log(`Should audit: ${shouldAudit}`);
+            console.log(`Contracts path: ${contractsPath}`);
+
+            core.setOutput('should_audit', shouldAudit ? 'true' : 'false');
+            core.setOutput('contracts_path', contractsPath);
+
+  audit:
+    name: Run Full Audit
+    needs: check-trigger
+    if: needs.check-trigger.outputs.should_audit == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add reaction to indicate processing
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = context.issue.number;
+            const commentId = context.payload.comment?.id;
+
+            if (commentId) {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId,
+                content: 'eyes',
+              });
+            } else {
+              await github.rest.reactions.createForIssue({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                content: 'eyes',
+              });
+            }
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Slither
+        run: |
+          pip install slither-analyzer
+          echo "Slither version: $(slither --version)"
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Install Aderyn
+        run: |
+          curl -L https://raw.githubusercontent.com/Cyfrin/aderyn/dev/cyfrinup/install | bash || true
+          export PATH="$HOME/.cyfrin/bin:$PATH"
+          cyfrinup || true
+          echo "$HOME/.cyfrin/bin" >> $GITHUB_PATH
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install MCP Audit Server
+        run: npm install -g solidity-audit-mcp
+
+      - name: Run Full Audit
+        id: audit
+        env:
+          CONTRACTS_PATH: ${{ needs.check-trigger.outputs.contracts_path }}
+        run: |
+          set +e
+
+          AUDIT_OUTPUT_DIR="${RUNNER_TEMP}/audit-results"
+          mkdir -p "$AUDIT_OUTPUT_DIR"
+          REPORT_FILE="${AUDIT_OUTPUT_DIR}/report.md"
+
+          # Find all Solidity files
+          FILES_TO_AUDIT=$(find "$CONTRACTS_PATH" -name "*.sol" -type f 2>/dev/null || true)
+
+          if [ -z "$FILES_TO_AUDIT" ]; then
+            echo "No Solidity files found in $CONTRACTS_PATH"
+            echo "# 🔍 Audit Report" > "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            echo "No Solidity files found in \`$CONTRACTS_PATH\`" >> "$REPORT_FILE"
+            echo "report-file=$REPORT_FILE" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Initialize report
+          echo "# 🔍 Smart Contract Audit Report" > "$REPORT_FILE"
+          echo "" >> "$REPORT_FILE"
+          echo "**Requested via:** ${GITHUB_EVENT_NAME}" >> "$REPORT_FILE"
+          echo "**Contracts path:** \`$CONTRACTS_PATH\`" >> "$REPORT_FILE"
+          echo "**Commit:** \`${GITHUB_SHA:0:7}\`" >> "$REPORT_FILE"
+          echo "" >> "$REPORT_FILE"
+          echo "---" >> "$REPORT_FILE"
+          echo "" >> "$REPORT_FILE"
+
+          # Counters
+          TOTAL_CRITICAL=0
+          TOTAL_HIGH=0
+          TOTAL_MEDIUM=0
+          TOTAL_LOW=0
+          TOTAL_INFO=0
+          TOTAL_GAS=0
+
+          # Audit each file
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              echo "Auditing: $file"
+              echo "" >> "$REPORT_FILE"
+              echo "## 📄 \`$file\`" >> "$REPORT_FILE"
+              echo "" >> "$REPORT_FILE"
+
+              # Run audit
+              RESULT=$(audit-cli audit "$file" --format json 2>/dev/null || echo '{"findings":[]}')
+
+              # Parse findings
+              FINDINGS=$(echo "$RESULT" | jq -c '.findings // []')
+              COUNT=$(echo "$FINDINGS" | jq 'length')
+
+              if [ "$COUNT" -eq 0 ]; then
+                echo "✅ No issues found" >> "$REPORT_FILE"
+              else
+                # Count by severity
+                CRITICAL=$(echo "$FINDINGS" | jq '[.[] | select(.severity == "critical")] | length')
+                HIGH=$(echo "$FINDINGS" | jq '[.[] | select(.severity == "high")] | length')
+                MEDIUM=$(echo "$FINDINGS" | jq '[.[] | select(.severity == "medium")] | length')
+                LOW=$(echo "$FINDINGS" | jq '[.[] | select(.severity == "low")] | length')
+                INFO=$(echo "$FINDINGS" | jq '[.[] | select(.severity == "informational")] | length')
+
+                TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL))
+                TOTAL_HIGH=$((TOTAL_HIGH + HIGH))
+                TOTAL_MEDIUM=$((TOTAL_MEDIUM + MEDIUM))
+                TOTAL_LOW=$((TOTAL_LOW + LOW))
+                TOTAL_INFO=$((TOTAL_INFO + INFO))
+
+                echo "| Severity | Issue | Line | Recommendation |" >> "$REPORT_FILE"
+                echo "|:--------:|-------|:----:|----------------|" >> "$REPORT_FILE"
+
+                echo "$FINDINGS" | jq -r '.[] | "| \(.severity | ascii_upcase) | \(.title) | \(.location.lines[0] // "?") | \(.recommendation // "-") |"' >> "$REPORT_FILE"
+              fi
+
+              # Run gas optimization
+              GAS_RESULT=$(audit-cli gas "$file" --format json 2>/dev/null || echo '{"findings":[]}')
+              GAS_FINDINGS=$(echo "$GAS_RESULT" | jq -c '.findings // []')
+              GAS_COUNT=$(echo "$GAS_FINDINGS" | jq 'length')
+
+              if [ "$GAS_COUNT" -gt 0 ]; then
+                TOTAL_GAS=$((TOTAL_GAS + GAS_COUNT))
+                echo "" >> "$REPORT_FILE"
+                echo "### ⛽ Gas Optimizations" >> "$REPORT_FILE"
+                echo "" >> "$REPORT_FILE"
+                echo "$GAS_FINDINGS" | jq -r '.[] | "- **Line \(.location.lines[0] // "?")**: \(.title)"' >> "$REPORT_FILE"
+              fi
+
+              echo "" >> "$REPORT_FILE"
+            fi
+          done <<< "$FILES_TO_AUDIT"
+
+          # Add summary at the top
+          SUMMARY_FILE="${AUDIT_OUTPUT_DIR}/summary.md"
+          echo "## 📊 Summary" > "$SUMMARY_FILE"
+          echo "" >> "$SUMMARY_FILE"
+          echo "| Severity | Count |" >> "$SUMMARY_FILE"
+          echo "|:---------|------:|" >> "$SUMMARY_FILE"
+          echo "| 🔴 Critical | $TOTAL_CRITICAL |" >> "$SUMMARY_FILE"
+          echo "| 🟠 High | $TOTAL_HIGH |" >> "$SUMMARY_FILE"
+          echo "| 🟡 Medium | $TOTAL_MEDIUM |" >> "$SUMMARY_FILE"
+          echo "| 🟢 Low | $TOTAL_LOW |" >> "$SUMMARY_FILE"
+          echo "| 🔵 Informational | $TOTAL_INFO |" >> "$SUMMARY_FILE"
+          echo "| ⛽ Gas Optimizations | $TOTAL_GAS |" >> "$SUMMARY_FILE"
+          echo "" >> "$SUMMARY_FILE"
+
+          # Determine risk level
+          if [ "$TOTAL_CRITICAL" -gt 0 ]; then
+            RISK="🔴 **CRITICAL**"
+          elif [ "$TOTAL_HIGH" -gt 0 ]; then
+            RISK="🟠 **HIGH**"
+          elif [ "$TOTAL_MEDIUM" -gt 0 ]; then
+            RISK="🟡 **MEDIUM**"
+          elif [ "$TOTAL_LOW" -gt 0 ]; then
+            RISK="🟢 **LOW**"
+          else
+            RISK="✅ **CLEAN**"
+          fi
+
+          echo "**Overall Risk:** $RISK" >> "$SUMMARY_FILE"
+          echo "" >> "$SUMMARY_FILE"
+          echo "---" >> "$SUMMARY_FILE"
+          echo "" >> "$SUMMARY_FILE"
+
+          # Combine summary with report
+          cat "$REPORT_FILE" >> "$SUMMARY_FILE"
+          mv "$SUMMARY_FILE" "$REPORT_FILE"
+
+          echo "report-file=$REPORT_FILE" >> $GITHUB_OUTPUT
+
+      - name: Post audit report as comment
+        uses: actions/github-script@v7
+        env:
+          REPORT_FILE: ${{ steps.audit.outputs.report-file }}
+        with:
+          script: |
+            const fs = require('fs');
+            const reportPath = process.env.REPORT_FILE;
+
+            let report = '# 🔍 Audit Report\n\nNo report generated.';
+            if (fs.existsSync(reportPath)) {
+              report = fs.readFileSync(reportPath, 'utf8');
+            }
+
+            // Add footer
+            report += '\n\n---\n';
+            report += '<sub>🤖 Generated by [MCP Audit Server](https://github.com/anthropics/solidity-audit-mcp)</sub>';
+
+            // Post comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: report,
+            });
+
+            console.log('Posted audit report');
+
+      - name: Add completion reaction
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = context.issue.number;
+            const commentId = context.payload.comment?.id;
+
+            if (commentId) {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId,
+                content: 'rocket',
+              });
+            } else {
+              await github.rest.reactions.createForIssue({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                content: 'rocket',
+              });
+            }

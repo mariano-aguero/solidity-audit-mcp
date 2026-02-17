@@ -12,6 +12,8 @@ export {
   type DiffResults,
   type RiskLevel,
   type CommentOptions,
+  type ReviewComment,
+  type ReviewOptions,
   // Functions
   determineRiskLevel,
   getRiskBadge,
@@ -23,6 +25,10 @@ export {
   generatePRComment,
   postPRComment,
   createAuditResults,
+  // Line-by-line review comments
+  findingToReviewComment,
+  findingsToReviewComments,
+  postReviewComments,
   // Aliases
   generateComment,
   postComment,

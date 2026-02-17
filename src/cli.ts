@@ -507,7 +507,7 @@ function writeOutput(content: string, options: CliOptions): void {
       logInfo(`Output written to ${options.output}`);
     }
   } else {
-    console.log(content);
+    process.stdout.write(content + "\n");
   }
 }
 
@@ -563,18 +563,18 @@ async function main(): Promise<void> {
       }
 
       case "help":
-        console.log(HELP_TEXT);
+        process.stdout.write(HELP_TEXT + "\n");
         exitCode = 0;
         break;
 
       case "version":
-        console.log(`${PROGRAM_NAME} v${VERSION}`);
+        process.stdout.write(`${PROGRAM_NAME} v${VERSION}\n`);
         exitCode = 0;
         break;
 
       default:
         logError(`Unknown command: ${command}`);
-        console.log(HELP_TEXT);
+        process.stderr.write(HELP_TEXT + "\n");
         exitCode = 2;
     }
   } catch (error) {

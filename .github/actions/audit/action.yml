@@ -35,6 +35,10 @@ inputs:
     description: "Generate SARIF output for GitHub Code Scanning"
     required: false
     default: "true"
+  inline-comments:
+    description: "Post inline review comments on specific lines"
+    required: false
+    default: "true"
   working-directory:
     description: "Working directory for the audit"
     required: false
@@ -463,6 +467,129 @@ runs:
             });
             console.log('Created new comment');
           }
+
+    - name: Post inline annotations for ALL findings
+      if: ${{ inputs.inline-comments == 'true' && github.event_name == 'pull_request' }}
+      uses: actions/github-script@v7
+      env:
+        SUMMARY_FILE: ${{ steps.audit.outputs.summary-file }}
+        HEAD_SHA: ${{ github.sha }}
+      with:
+        script: |
+          const fs = require('fs');
+
+          // Read summary file with findings
+          let summary = { findings: [], gasOptimizations: [] };
+          try {
+            const summaryPath = process.env.SUMMARY_FILE;
+            if (fs.existsSync(summaryPath)) {
+              summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+            }
+          } catch (e) {
+            console.log('Could not read summary file:', e.message);
+            return;
+          }
+
+          const allFindings = [...(summary.findings || []), ...(summary.gasOptimizations || [])];
+          if (allFindings.length === 0) {
+            console.log('No findings to annotate');
+            return;
+          }
+
+          // Severity mapping
+          const severityToLevel = {
+            critical: 'failure',
+            high: 'failure',
+            medium: 'warning',
+            low: 'warning',
+            informational: 'notice',
+          };
+
+          const severityEmoji = {
+            critical: '🔴',
+            high: '🟠',
+            medium: '🟡',
+            low: '🟢',
+            informational: '🔵',
+          };
+
+          // Build annotations for ALL findings
+          const annotations = [];
+          for (const finding of allFindings) {
+            if (!finding.location?.file) continue;
+
+            const filePath = finding.location.file;
+            const startLine = finding.location.lines?.[0] || 1;
+            const endLine = finding.location.lines?.[1] || startLine;
+
+            const emoji = severityEmoji[finding.severity] || '⚪';
+            const message = [
+              `${emoji} ${(finding.severity || 'unknown').toUpperCase()}: ${finding.title}`,
+              '',
+              finding.description || '',
+              '',
+              finding.recommendation ? `Recommendation: ${finding.recommendation}` : '',
+              '',
+              `Detector: ${finding.detector || 'unknown'}${finding.swcId ? ` | SWC: ${finding.swcId}` : ''}`,
+            ].filter(Boolean).join('\n');
+
+            annotations.push({
+              path: filePath,
+              start_line: startLine,
+              end_line: endLine,
+              annotation_level: severityToLevel[finding.severity] || 'warning',
+              message: message,
+              title: finding.title,
+            });
+          }
+
+          if (annotations.length === 0) {
+            console.log('No valid annotations');
+            return;
+          }
+
+          console.log(`Creating check run with ${annotations.length} annotations...`);
+
+          // GitHub limits to 50 annotations per request, so batch them
+          const batchSize = 50;
+          const batches = [];
+          for (let i = 0; i < annotations.length; i += batchSize) {
+            batches.push(annotations.slice(i, i + batchSize));
+          }
+
+          // Create check run with first batch
+          const checkRun = await github.rest.checks.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            name: 'Solidity Audit',
+            head_sha: process.env.HEAD_SHA,
+            status: 'completed',
+            conclusion: annotations.some(a => a.annotation_level === 'failure') ? 'failure' : 'neutral',
+            output: {
+              title: `🔍 Audit: ${annotations.length} finding(s)`,
+              summary: `Found ${annotations.length} security issues and gas optimizations.`,
+              annotations: batches[0],
+            },
+          });
+
+          console.log(`Created check run ${checkRun.data.id} with ${batches[0].length} annotations`);
+
+          // Update with remaining batches
+          for (let i = 1; i < batches.length; i++) {
+            await github.rest.checks.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              check_run_id: checkRun.data.id,
+              output: {
+                title: `🔍 Audit: ${annotations.length} finding(s)`,
+                summary: `Found ${annotations.length} security issues and gas optimizations.`,
+                annotations: batches[i],
+              },
+            });
+            console.log(`Added batch ${i + 1}/${batches.length} with ${batches[i].length} annotations`);
+          }
+
+          console.log(`Successfully annotated ${annotations.length} findings`);
 
     - name: Check threshold
       if: ${{ inputs.fail-on-findings == 'true' }}

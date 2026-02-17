@@ -646,7 +646,7 @@ httpServer.listen(PORT, HOST, () => {
     port: PORT,
     authEnabled: !!API_KEY,
   });
-  console.log(`
+  console.warn(`
 ╔════════════════════════════════════════════════════════════════╗
 ║                    MCP Audit Server (SSE)                      ║
 ╠════════════════════════════════════════════════════════════════╣

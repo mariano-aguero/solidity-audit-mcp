@@ -44,6 +44,18 @@ export interface CommentOptions {
   prUrl?: string;
 }
 
+export interface ReviewComment {
+  path: string;
+  line: number;
+  side?: "LEFT" | "RIGHT";
+  body: string;
+}
+
+export interface ReviewOptions extends CommentOptions {
+  commitSha: string;
+  event?: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+}
+
 // ============================================================================
 // Risk Level Detection
 // ============================================================================
@@ -310,6 +322,221 @@ export function generatePRComment(results: AuditResults, prUrl?: string): string
 
 const COMMENT_SIGNATURE = "🔍 Smart Contract Audit Report";
 
+// ============================================================================
+// Line-by-Line Review Comments
+// ============================================================================
+
+/**
+ * Convert a Finding to a review comment format for inline PR comments.
+ */
+export function findingToReviewComment(finding: Finding): ReviewComment | null {
+  if (!finding.location.file || !finding.location.lines?.[0]) {
+    return null;
+  }
+
+  const emoji = getSeverityEmoji(finding.severity);
+  const body = [
+    `${emoji} **${finding.severity.toUpperCase()}**: ${finding.title}`,
+    "",
+    finding.description,
+    "",
+    `**Recommendation:** ${finding.recommendation}`,
+    "",
+    `_Detector: \`${finding.detector}\`${finding.swcId ? ` | SWC: ${finding.swcId}` : ""}_`,
+  ].join("\n");
+
+  return {
+    path: finding.location.file,
+    line: finding.location.lines[0],
+    side: "RIGHT",
+    body,
+  };
+}
+
+/**
+ * Convert all findings to review comments, filtering out those without valid locations.
+ */
+export function findingsToReviewComments(findings: Finding[]): ReviewComment[] {
+  return findings
+    .map(findingToReviewComment)
+    .filter((comment): comment is ReviewComment => comment !== null);
+}
+
+/**
+ * Post inline review comments on specific lines of the PR diff.
+ * This creates a PR review with line-by-line annotations.
+ */
+export async function postReviewComments(
+  findings: Finding[],
+  options: ReviewOptions
+): Promise<{ reviewId: number; commentsPosted: number }> {
+  const { owner, repo, prNumber, token, commitSha, event = "COMMENT" } = options;
+
+  const comments = findingsToReviewComments(findings);
+
+  if (comments.length === 0) {
+    // Create a review without inline comments if no valid locations
+    const reviewId = await createReview(owner, repo, prNumber, commitSha, [], event, token);
+    return { reviewId, commentsPosted: 0 };
+  }
+
+  // Get the diff to validate which lines can be commented on
+  const diffFiles = await getPRDiffFiles(owner, repo, prNumber, token);
+  const validComments = filterValidComments(comments, diffFiles);
+
+  const reviewId = await createReview(
+    owner,
+    repo,
+    prNumber,
+    commitSha,
+    validComments,
+    event,
+    token
+  );
+
+  return { reviewId, commentsPosted: validComments.length };
+}
+
+/**
+ * Get the list of files changed in the PR with their diff positions.
+ */
+async function getPRDiffFiles(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  token: string
+): Promise<Map<string, Set<number>>> {
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/files`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "solidity-audit-mcp",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch PR files: ${response.status} ${response.statusText}`);
+  }
+
+  const files = (await response.json()) as Array<{
+    filename: string;
+    patch?: string;
+  }>;
+
+  // Build a map of filename -> set of valid line numbers from the diff
+  const fileLines = new Map<string, Set<number>>();
+
+  for (const file of files) {
+    if (!file.patch) continue;
+
+    const lines = new Set<number>();
+    let currentLine = 0;
+
+    // Parse the patch to extract valid line numbers
+    // Format: @@ -old_start,old_count +new_start,new_count @@
+    const hunkRegex = /@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/g;
+    const patchLines = file.patch.split("\n");
+
+    for (const patchLine of patchLines) {
+      const hunkMatch = hunkRegex.exec(patchLine);
+      if (hunkMatch?.[1]) {
+        currentLine = parseInt(hunkMatch[1], 10);
+        hunkRegex.lastIndex = 0;
+        continue;
+      }
+
+      if (patchLine.startsWith("+") && !patchLine.startsWith("+++")) {
+        lines.add(currentLine);
+        currentLine++;
+      } else if (patchLine.startsWith("-") && !patchLine.startsWith("---")) {
+        // Deleted lines don't increment currentLine
+      } else if (!patchLine.startsWith("\\")) {
+        // Context line
+        currentLine++;
+      }
+    }
+
+    fileLines.set(file.filename, lines);
+  }
+
+  return fileLines;
+}
+
+/**
+ * Filter comments to only include those on valid diff lines.
+ */
+function filterValidComments(
+  comments: ReviewComment[],
+  diffFiles: Map<string, Set<number>>
+): ReviewComment[] {
+  return comments.filter((comment) => {
+    const fileLines = diffFiles.get(comment.path);
+    if (!fileLines) {
+      // Try with different path formats
+      for (const [diffPath, lines] of diffFiles) {
+        if (diffPath.endsWith(comment.path) || comment.path.endsWith(diffPath)) {
+          return lines.has(comment.line);
+        }
+      }
+      return false;
+    }
+    return fileLines.has(comment.line);
+  });
+}
+
+/**
+ * Create a PR review with inline comments.
+ */
+async function createReview(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  commitSha: string,
+  comments: ReviewComment[],
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT",
+  token: string
+): Promise<number> {
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
+
+  const body =
+    comments.length > 0
+      ? `🔍 **Solidity Audit**: Found ${comments.length} issue(s) in the changed code.`
+      : "🔍 **Solidity Audit**: No issues found in the changed lines.";
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "solidity-audit-mcp",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      commit_id: commitSha,
+      body,
+      event,
+      comments: comments.map((c) => ({
+        path: c.path,
+        line: c.line,
+        side: c.side ?? "RIGHT",
+        body: c.body,
+      })),
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(
+      `Failed to create review: ${response.status} ${response.statusText} - ${errorBody}`
+    );
+  }
+
+  const data = (await response.json()) as { id: number };
+  return data.id;
+}
+
 /**
  * Post or update a PR comment with audit results.
  */
@@ -439,7 +666,7 @@ async function updateComment(
  * Escape markdown special characters.
  */
 function escapeMarkdown(text: string): string {
-  return text.replace(/[|`*_{}[\]()#+\-.!]/g, "\\$&").substring(0, 80);
+  return text.replace(/[|`*_{}[\]()#+\-.!]/g, "\\$&");
 }
 
 /**
