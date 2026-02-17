@@ -1,35 +1,30 @@
 /**
  * Analyze Contract Tool
  *
- * Main orchestrator for the security analysis pipeline.
- * Runs Slither, Aderyn, and optionally Forge tests in parallel,
- * then deduplicates and formats the results.
+ * Main entry point for security analysis of Solidity contracts.
+ * Uses the AnalyzerOrchestrator to coordinate multiple analyzers.
  */
 
 import { access, readFile } from "node:fs/promises";
 import { z } from "zod";
-import {
-  getProjectRoot,
-  checkToolsAvailable,
-  executeCommand,
-  formatDuration,
-} from "../utils/executor.js";
+import { getProjectRoot, executeCommand, formatDuration } from "../utils/executor.js";
 import { logger } from "../utils/logger.js";
-import { runSlither } from "../analyzers/slither.js";
-import { runAderyn, deduplicateFindings } from "../analyzers/aderyn.js";
-import { analyzeGasPatterns } from "../analyzers/gasOptimizer.js";
 import {
-  analyzeWithSlang,
-  parseContractInfo,
-  detectPatterns,
-  type SlangAnalysisResult,
-} from "../analyzers/slangAnalyzer.js";
+  countBySeverity,
+  getSeverityEmoji,
+  calculateTotalGasSavings,
+  formatGasSavings,
+} from "../utils/severity.js";
+import { createOrchestrator } from "../analyzers/AnalyzerOrchestrator.js";
+import { getAnalyzerRegistry } from "../analyzers/AnalyzerRegistry.js";
+import type { AnalyzerId, AnalyzerResult } from "../analyzers/types.js";
+import { parseContractInfo, detectPatterns } from "../analyzers/slangAnalyzer.js";
 import {
   loadCustomDetectors,
   runCustomDetectors,
   type CustomDetector,
 } from "../detectors/customDetectorEngine.js";
-import { Severity, type Finding, type ContractInfo } from "../types/index.js";
+import { type Finding, type ContractInfo } from "../types/index.js";
 
 // ============================================================================
 // Types
@@ -46,6 +41,10 @@ export const AnalyzeContractInputSchema = z.object({
     .optional()
     .default(false)
     .describe("Whether to run forge tests as part of the analysis"),
+  analyzers: z
+    .array(z.enum(["slither", "aderyn", "slang", "gas"]))
+    .optional()
+    .describe("Specific analyzers to run (defaults to all available)"),
 });
 
 export type AnalyzeContractInput = z.infer<typeof AnalyzeContractInputSchema>;
@@ -171,7 +170,20 @@ export async function analyzeContract(input: AnalyzeContractInput): Promise<stri
   }
 
   // -------------------------------------------------------------------------
-  // 3. Load custom detectors (if config exists)
+  // 3. Parse contract info (always needed for output)
+  // -------------------------------------------------------------------------
+  let contractInfo: ContractInfo;
+  try {
+    contractInfo = await parseContractInfo(input.contractPath);
+  } catch (err) {
+    return formatError(
+      "Failed to parse contract",
+      `Could not extract contract metadata: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. Load custom detectors (if config exists)
   // -------------------------------------------------------------------------
   let customDetectors: CustomDetector[] = [];
   try {
@@ -183,314 +195,147 @@ export async function analyzeContract(input: AnalyzeContractInput): Promise<stri
   }
 
   // -------------------------------------------------------------------------
-  // 4. Check available tools
+  // 5. Run analyzers using the orchestrator
   // -------------------------------------------------------------------------
-  const toolStatus = await checkToolsAvailable(["slither", "aderyn", "forge"]);
+  logger.info("[analyze] Running analysis pipeline...");
 
-  const hasSlither = toolStatus["slither"]?.available ?? false;
-  const hasAderyn = toolStatus["aderyn"]?.available ?? false;
-  const hasForge = toolStatus["forge"]?.available ?? false;
+  const orchestrator = createOrchestrator({
+    maxConcurrency: 3,
+    pipelineTimeout: PIPELINE_TIMEOUT,
+    continueOnError: true,
+  });
 
-  if (!hasSlither && !hasAderyn) {
+  // Track progress for toolsUsed
+  orchestrator.onProgress((progress) => {
+    if (progress.status === "completed" && progress.result) {
+      const count = progress.result.findings.length;
+      toolsUsed.push(`${progress.analyzerId} (${count} findings)`);
+    } else if (progress.status === "failed") {
+      warnings.push(`${progress.analyzerId} failed: ${progress.error}`);
+    }
+  });
+
+  // Run specified analyzers or all available
+  let orchestratorResult;
+  if (input.analyzers && input.analyzers.length > 0) {
+    orchestratorResult = await orchestrator.analyzeWith(input.analyzers as AnalyzerId[], {
+      contractPath: input.contractPath,
+      projectRoot,
+    });
+  } else {
+    orchestratorResult = await orchestrator.analyze({
+      contractPath: input.contractPath,
+      projectRoot,
+    });
+  }
+
+  // Check if any external analyzers ran
+  const registry = getAnalyzerRegistry();
+  const externalAnalyzers = registry.getExternal();
+  const ranExternal = orchestratorResult.analyzersUsed.some((id) =>
+    externalAnalyzers.some((a) => a.id === id)
+  );
+
+  if (!ranExternal && orchestratorResult.analyzersUsed.length === 0) {
     return formatError(
-      "No security analysis tools are installed",
+      "No security analysis tools are available",
       "Install at least one of the following:\n" +
         "  • Slither: pip install slither-analyzer\n" +
         "  • Aderyn: cargo install aderyn"
     );
   }
 
-  if (!hasSlither) {
-    warnings.push("Slither not installed - skipping Slither analysis");
-  }
-  if (!hasAderyn) {
-    warnings.push("Aderyn not installed - skipping Aderyn analysis");
-  }
-  if (input.runTests && !hasForge) {
-    warnings.push("Forge not installed - skipping tests");
-  }
+  // Collect warnings from orchestrator
+  warnings.push(...orchestratorResult.warnings);
 
   // -------------------------------------------------------------------------
-  // 5. Run analysis in parallel
+  // 6. Extract findings by category
   // -------------------------------------------------------------------------
-  logger.info("[analyze] Running analysis pipeline...");
+  const securityFindings: Finding[] = [];
+  const gasOptimizations: Finding[] = [];
 
-  const analysisPromises: Promise<unknown>[] = [];
-  const promiseLabels: string[] = [];
-
-  // Always parse contract info
-  analysisPromises.push(
-    parseContractInfo(input.contractPath).catch((err) => {
-      warnings.push(`Contract parsing failed: ${err.message}`);
-      return null;
-    })
-  );
-  promiseLabels.push("parseContractInfo");
-
-  // Run Slither if available
-  if (hasSlither) {
-    analysisPromises.push(
-      runSlitherWithTiming(input.contractPath, projectRoot).catch((err) => {
-        warnings.push(`Slither failed: ${err.message}`);
-        return { findings: [], executionTime: 0 };
-      })
-    );
-    promiseLabels.push("slither");
-  }
-
-  // Run Aderyn if available
-  if (hasAderyn) {
-    analysisPromises.push(
-      runAderynWithTiming(input.contractPath, projectRoot).catch((err) => {
-        warnings.push(`Aderyn failed: ${err.message}`);
-        return { findings: [], executionTime: 0 };
-      })
-    );
-    promiseLabels.push("aderyn");
-  }
-
-  // Run gas optimization analysis
-  analysisPromises.push(
-    runGasAnalysisWithTiming(input.contractPath).catch((err) => {
-      warnings.push(`Gas analysis failed: ${err.message}`);
-      return { findings: [], executionTime: 0 };
-    })
-  );
-  promiseLabels.push("gas");
-
-  // Run Slang AST-based analysis (always available, no external dependency)
-  analysisPromises.push(
-    runSlangWithTiming(input.contractPath).catch((err) => {
-      warnings.push(`Slang analysis failed: ${err.message}`);
-      return { findings: [], parseErrors: [], executionTime: 0, detectorCount: 0 };
-    })
-  );
-  promiseLabels.push("slang");
-
-  // Run custom detectors if any are loaded
-  if (customDetectors.length > 0) {
-    analysisPromises.push(
-      runCustomDetectorsWithTiming(input.contractPath, customDetectors, projectRoot).catch(
-        (err) => {
-          warnings.push(`Custom detectors failed: ${err.message}`);
-          return { findings: [], executionTime: 0, detectorsLoaded: customDetectors.length };
-        }
-      )
-    );
-    promiseLabels.push("custom");
-  }
-
-  // Run tests if requested and forge is available
-  if (input.runTests && hasForge) {
-    analysisPromises.push(
-      runForgeTests(projectRoot).catch((err) => {
-        warnings.push(`Forge tests failed: ${err.message}`);
-        return null;
-      })
-    );
-    promiseLabels.push("forge");
-  }
-
-  // Execute all with timeout using Promise.allSettled for better error handling
-  let settledResults: PromiseSettledResult<unknown>[];
-  try {
-    const allPromises = Promise.allSettled(analysisPromises);
-    const timeoutProm = new Promise<PromiseSettledResult<unknown>[]>((_, reject) => {
-      setTimeout(() => reject(new Error("Pipeline timeout")), PIPELINE_TIMEOUT);
-    });
-    settledResults = await Promise.race([allPromises, timeoutProm]);
-  } catch (err) {
-    if (err instanceof Error && err.message === "Pipeline timeout") {
-      return formatError(
-        "Analysis pipeline timed out",
-        `The analysis took longer than ${formatDuration(PIPELINE_TIMEOUT)}. ` +
-          "Try analyzing a smaller scope or increasing the timeout."
-      );
-    }
-    return formatError(
-      "Analysis pipeline failed",
-      err instanceof Error ? err.message : String(err)
-    );
-  }
-
-  // Process settled results - extract values and collect errors
-  const results: unknown[] = settledResults.map((result, index) => {
-    if (result.status === "rejected") {
-      const label = promiseLabels[index] ?? `task-${index}`;
-      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-      warnings.push(`${label} failed: ${reason}`);
-      logger.warn(`Analysis task failed`, { task: label, error: reason });
-      return null;
-    }
-    return result.value;
-  });
-
-  // -------------------------------------------------------------------------
-  // 6. Process results
-  // -------------------------------------------------------------------------
-  let resultIndex = 0;
-
-  // Contract info
-  const contractInfo = results[resultIndex++] as Awaited<
-    ReturnType<typeof parseContractInfo>
-  > | null;
-
-  if (!contractInfo) {
-    return formatError(
-      "Failed to parse contract",
-      "Could not extract contract metadata. The file may be malformed."
-    );
-  }
-
-  // Slither results
-  type ToolResult = { findings: Finding[]; executionTime: number } | null;
-  let slitherResult: ToolResult = null;
-  if (hasSlither) {
-    slitherResult = results[resultIndex++] as ToolResult;
-    if (slitherResult && slitherResult.findings.length > 0) {
-      toolsUsed.push(`slither (${slitherResult.findings.length} findings)`);
-    } else if (slitherResult) {
-      toolsUsed.push("slither (0 findings)");
-    }
-  }
-
-  // Aderyn results
-  let aderynResult: ToolResult = null;
-  if (hasAderyn) {
-    aderynResult = results[resultIndex++] as ToolResult;
-    if (aderynResult && aderynResult.findings.length > 0) {
-      toolsUsed.push(`aderyn (${aderynResult.findings.length} findings)`);
-    } else if (aderynResult) {
-      toolsUsed.push("aderyn (0 findings)");
-    }
-  }
-
-  // Gas optimization results
-  const gasResult = results[resultIndex++] as ToolResult;
-  const gasOptimizations = gasResult?.findings ?? [];
-  if (gasOptimizations.length > 0) {
-    toolsUsed.push(`gas-optimizer (${gasOptimizations.length} findings)`);
-  }
-
-  // Slang AST-based analysis results
-  const slangResult = results[resultIndex++] as SlangAnalysisResult | null;
-  const slangFindings = slangResult?.findings ?? [];
-  if (slangResult) {
-    if (slangResult.findings.length > 0) {
-      toolsUsed.push(
-        `slang (${slangResult.findings.length} findings from ${slangResult.detectorCount} detectors)`
-      );
+  // Separate gas findings from security findings
+  for (const finding of orchestratorResult.findings) {
+    if (finding.detector === "gas-optimizer" || finding.detector.startsWith("gas")) {
+      gasOptimizations.push(finding);
     } else {
-      toolsUsed.push(`slang (0 findings from ${slangResult.detectorCount} detectors)`);
-    }
-    // Add parse errors to warnings
-    if (slangResult.parseErrors.length > 0) {
-      warnings.push(...slangResult.parseErrors.map((e) => `Slang parse: ${e}`));
+      securityFindings.push(finding);
     }
   }
 
-  // Custom detector results
-  type CustomResult = {
-    findings: Finding[];
-    executionTime: number;
-    detectorsLoaded: number;
-  } | null;
-  let customResult: CustomResult = null;
+  // -------------------------------------------------------------------------
+  // 7. Run custom detectors (separate from orchestrator)
+  // -------------------------------------------------------------------------
+  let customFindings: Finding[] = [];
+  let customExecutionTime = 0;
+
   if (customDetectors.length > 0) {
-    customResult = results[resultIndex++] as CustomResult;
-    if (customResult && customResult.findings.length > 0) {
-      toolsUsed.push(
-        `custom-detectors (${customResult.findings.length} findings from ${customResult.detectorsLoaded} detectors)`
-      );
-    } else if (customResult) {
-      toolsUsed.push(
-        `custom-detectors (0 findings from ${customResult.detectorsLoaded} detectors)`
-      );
+    const customStart = Date.now();
+    try {
+      const source = await readFile(input.contractPath, "utf-8");
+      customFindings = runCustomDetectors(source, input.contractPath, customDetectors, projectRoot);
+      customExecutionTime = Date.now() - customStart;
+
+      if (customFindings.length > 0) {
+        toolsUsed.push(
+          `custom-detectors (${customFindings.length} findings from ${customDetectors.length} detectors)`
+        );
+      } else {
+        toolsUsed.push(`custom-detectors (0 findings from ${customDetectors.length} detectors)`);
+      }
+    } catch (err) {
+      warnings.push(`Custom detectors failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  const customFindings = customResult?.findings ?? [];
 
-  // Test results
+  // -------------------------------------------------------------------------
+  // 8. Run tests if requested
+  // -------------------------------------------------------------------------
   let testResults: TestResults | undefined;
-  if (input.runTests && hasForge) {
-    testResults = (results[resultIndex++] as TestResults | null) ?? undefined;
-    if (testResults) {
+
+  if (input.runTests) {
+    try {
+      testResults = await runForgeTests(projectRoot);
       toolsUsed.push("forge");
+    } catch (err) {
+      warnings.push(`Forge tests failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   // -------------------------------------------------------------------------
-  // 7. Deduplicate and sort findings
-  // -------------------------------------------------------------------------
-  const slitherFindings = slitherResult?.findings ?? [];
-  const aderynFindings = aderynResult?.findings ?? [];
-
-  // Combine findings from all sources
-  let allFindings: Finding[];
-  if (slitherFindings.length > 0 && aderynFindings.length > 0) {
-    // Deduplicate Slither and Aderyn findings
-    allFindings = deduplicateFindings(slitherFindings, aderynFindings);
-  } else {
-    allFindings = [...slitherFindings, ...aderynFindings];
-  }
-
-  // Add Slang findings (these are unique AST-based detections)
-  // Slang findings complement Slither/Aderyn, so we add them directly
-  if (slangFindings.length > 0) {
-    // Deduplicate Slang findings with existing findings based on line and title similarity
-    const existingKeys = new Set(
-      allFindings.map((f) => `${f.location.lines?.[0] ?? 0}:${f.title.toLowerCase().slice(0, 20)}`)
-    );
-    const uniqueSlangFindings = slangFindings.filter((f) => {
-      const key = `${f.location.lines?.[0] ?? 0}:${f.title.toLowerCase().slice(0, 20)}`;
-      return !existingKeys.has(key);
-    });
-    allFindings = [...allFindings, ...uniqueSlangFindings];
-  }
-
-  // Sort by severity (CRITICAL first, INFORMATIONAL last)
-  allFindings.sort((a, b) => {
-    const severityOrder: Record<Severity, number> = {
-      [Severity.CRITICAL]: 0,
-      [Severity.HIGH]: 1,
-      [Severity.MEDIUM]: 2,
-      [Severity.LOW]: 3,
-      [Severity.INFORMATIONAL]: 4,
-    };
-    return severityOrder[a.severity] - severityOrder[b.severity];
-  });
-
-  // -------------------------------------------------------------------------
-  // 8. Detect patterns
+  // 9. Detect patterns
   // -------------------------------------------------------------------------
   const source = await readFile(input.contractPath, "utf-8");
   const patterns = detectPatterns(source);
 
   // -------------------------------------------------------------------------
-  // 9. Generate summaries
+  // 10. Generate summaries
   // -------------------------------------------------------------------------
-  const summary = calculateSummary(allFindings);
+  const summary = countBySeverity(securityFindings);
   const gasSummary = calculateGasSummary(gasOptimizations);
-  const customSummary = calculateCustomSummary(customFindings, customDetectors.length);
+  const customSummary = {
+    ...countBySeverity(customFindings),
+    detectorsLoaded: customDetectors.length,
+  };
 
   // -------------------------------------------------------------------------
-  // 10. Build result
+  // 11. Build raw output from analyzer results
+  // -------------------------------------------------------------------------
+  const rawOutput = buildRawOutput(
+    orchestratorResult.analyzerResults,
+    customFindings,
+    customExecutionTime,
+    customDetectors.length
+  );
+
+  // -------------------------------------------------------------------------
+  // 12. Build final result
   // -------------------------------------------------------------------------
   const executionTime = Date.now() - startTime;
 
   const result: AnalysisResult = {
-    contractInfo: {
-      name: contractInfo.name,
-      path: contractInfo.path,
-      compiler: contractInfo.compiler,
-      functions: contractInfo.functions,
-      stateVariables: contractInfo.stateVariables,
-      inherits: contractInfo.inherits,
-      interfaces: contractInfo.interfaces,
-      hasConstructor: contractInfo.hasConstructor,
-      usesProxy: contractInfo.usesProxy,
-    },
-    findings: allFindings,
+    contractInfo,
+    findings: securityFindings,
     gasOptimizations,
     gasSummary,
     customFindings,
@@ -505,48 +350,14 @@ export async function analyzeContract(input: AnalyzeContractInput): Promise<stri
     testResults,
     toolsUsed,
     warnings,
-    rawOutput: {
-      slither: slitherResult
-        ? {
-            findingsCount: slitherResult.findings.length,
-            executionTime: slitherResult.executionTime,
-          }
-        : undefined,
-      aderyn: aderynResult
-        ? {
-            findingsCount: aderynResult.findings.length,
-            executionTime: aderynResult.executionTime,
-          }
-        : undefined,
-      gas: gasResult
-        ? {
-            findingsCount: gasResult.findings.length,
-            executionTime: gasResult.executionTime,
-          }
-        : undefined,
-      slang: slangResult
-        ? {
-            findingsCount: slangResult.findings.length,
-            executionTime: slangResult.executionTime,
-            detectorCount: slangResult.detectorCount,
-            parseErrors: slangResult.parseErrors.length,
-          }
-        : undefined,
-      custom: customResult
-        ? {
-            findingsCount: customResult.findings.length,
-            executionTime: customResult.executionTime,
-            detectorsLoaded: customResult.detectorsLoaded,
-          }
-        : undefined,
-    },
+    rawOutput,
     executionTime,
   };
 
   logger.info(`[analyze] Analysis complete in ${formatDuration(executionTime)}`);
 
   // -------------------------------------------------------------------------
-  // 11. Format output
+  // 13. Format output
   // -------------------------------------------------------------------------
   return formatOutput(result);
 }
@@ -556,75 +367,59 @@ export async function analyzeContract(input: AnalyzeContractInput): Promise<stri
 // ============================================================================
 
 /**
- * Run Slither with timing information
+ * Build raw output structure from analyzer results
  */
-async function runSlitherWithTiming(
-  contractPath: string,
-  projectRoot: string
-): Promise<{ findings: Finding[]; executionTime: number }> {
-  const start = Date.now();
-  const findings = await runSlither(contractPath, projectRoot);
-  return {
-    findings,
-    executionTime: Date.now() - start,
-  };
-}
+function buildRawOutput(
+  analyzerResults: Map<AnalyzerId, AnalyzerResult>,
+  customFindings: Finding[],
+  customExecutionTime: number,
+  customDetectorsLoaded: number
+): AnalysisResult["rawOutput"] {
+  const rawOutput: AnalysisResult["rawOutput"] = {};
 
-/**
- * Run Aderyn with timing information
- */
-async function runAderynWithTiming(
-  contractPath: string,
-  projectRoot: string
-): Promise<{ findings: Finding[]; executionTime: number }> {
-  const start = Date.now();
-  const findings = await runAderyn(contractPath, projectRoot);
-  return {
-    findings,
-    executionTime: Date.now() - start,
-  };
-}
+  const slitherResult = analyzerResults.get("slither");
+  if (slitherResult) {
+    rawOutput.slither = {
+      findingsCount: slitherResult.findings.length,
+      executionTime: slitherResult.executionTime,
+    };
+  }
 
-/**
- * Run gas optimization analysis with timing information
- */
-async function runGasAnalysisWithTiming(
-  contractPath: string
-): Promise<{ findings: Finding[]; executionTime: number }> {
-  const start = Date.now();
-  const findings = await analyzeGasPatterns(contractPath);
-  return {
-    findings,
-    executionTime: Date.now() - start,
-  };
-}
+  const aderynResult = analyzerResults.get("aderyn");
+  if (aderynResult) {
+    rawOutput.aderyn = {
+      findingsCount: aderynResult.findings.length,
+      executionTime: aderynResult.executionTime,
+    };
+  }
 
-/**
- * Run Slang analysis with timing information
- */
-async function runSlangWithTiming(contractPath: string): Promise<SlangAnalysisResult> {
-  const source = await readFile(contractPath, "utf-8");
-  return analyzeWithSlang(source, contractPath, {
-    includeInformational: true,
-  });
-}
+  const gasResult = analyzerResults.get("gas");
+  if (gasResult) {
+    rawOutput.gas = {
+      findingsCount: gasResult.findings.length,
+      executionTime: gasResult.executionTime,
+    };
+  }
 
-/**
- * Run custom detectors with timing information
- */
-async function runCustomDetectorsWithTiming(
-  contractPath: string,
-  detectors: CustomDetector[],
-  projectRoot: string
-): Promise<{ findings: Finding[]; executionTime: number; detectorsLoaded: number }> {
-  const start = Date.now();
-  const source = await readFile(contractPath, "utf-8");
-  const findings = runCustomDetectors(source, contractPath, detectors, projectRoot);
-  return {
-    findings,
-    executionTime: Date.now() - start,
-    detectorsLoaded: detectors.length,
-  };
+  const slangResult = analyzerResults.get("slang");
+  if (slangResult) {
+    rawOutput.slang = {
+      findingsCount: slangResult.findings.length,
+      executionTime: slangResult.executionTime,
+      detectorCount: slangResult.metadata.detectorCount ?? 0,
+      parseErrors: (slangResult.metadata.parseErrors as string[] | undefined)?.length ?? 0,
+    };
+  }
+
+  if (customDetectorsLoaded > 0) {
+    rawOutput.custom = {
+      findingsCount: customFindings.length,
+      executionTime: customExecutionTime,
+      detectorsLoaded: customDetectorsLoaded,
+    };
+  }
+
+  return rawOutput;
 }
 
 /**
@@ -633,13 +428,11 @@ async function runCustomDetectorsWithTiming(
 async function runForgeTests(projectRoot: string): Promise<TestResults> {
   const start = Date.now();
 
-  // Run forge test
   const testResult = await executeCommand("forge", ["test", "--gas-report", "-v"], {
     cwd: projectRoot,
     timeout: 120_000,
   });
 
-  // Parse test results
   let passed = 0;
   let failed = 0;
   let skipped = 0;
@@ -652,7 +445,6 @@ async function runForgeTests(projectRoot: string): Promise<TestResults> {
   if (failMatch) failed = parseInt(failMatch[1]!, 10);
   if (skipMatch) skipped = parseInt(skipMatch[1]!, 10);
 
-  // Try to get coverage (may fail if not configured)
   let coverage: number | undefined;
   try {
     const coverageResult = await executeCommand("forge", ["coverage", "--report", "summary"], {
@@ -660,7 +452,6 @@ async function runForgeTests(projectRoot: string): Promise<TestResults> {
       timeout: 120_000,
     });
 
-    // Parse coverage percentage
     const coverageMatch = coverageResult.stdout.match(/Total[^|]*\|\s*([\d.]+)%/);
     if (coverageMatch) {
       coverage = parseFloat(coverageMatch[1]!);
@@ -688,128 +479,20 @@ function extractGasReport(output: string): string | undefined {
 }
 
 /**
- * Calculate summary counts by severity
- */
-function calculateSummary(findings: Finding[]): AnalysisSummary {
-  const summary: AnalysisSummary = {
-    total: findings.length,
-    critical: 0,
-    high: 0,
-    medium: 0,
-    low: 0,
-    informational: 0,
-  };
-
-  for (const finding of findings) {
-    switch (finding.severity) {
-      case Severity.CRITICAL:
-        summary.critical++;
-        break;
-      case Severity.HIGH:
-        summary.high++;
-        break;
-      case Severity.MEDIUM:
-        summary.medium++;
-        break;
-      case Severity.LOW:
-        summary.low++;
-        break;
-      case Severity.INFORMATIONAL:
-        summary.informational++;
-        break;
-    }
-  }
-
-  return summary;
-}
-
-/**
  * Calculate gas optimization summary
  */
 function calculateGasSummary(findings: Finding[]): GasOptimizationSummary {
-  const summary: GasOptimizationSummary = {
-    total: findings.length,
-    high: 0,
-    medium: 0,
-    low: 0,
-    informational: 0,
-    estimatedSavings: "0",
+  const counts = countBySeverity(findings);
+  const totalGas = calculateTotalGasSavings(findings);
+
+  return {
+    total: counts.total,
+    high: counts.high,
+    medium: counts.medium,
+    low: counts.low,
+    informational: counts.informational,
+    estimatedSavings: formatGasSavings(totalGas),
   };
-
-  let totalGas = 0;
-
-  for (const finding of findings) {
-    switch (finding.severity) {
-      case Severity.HIGH:
-        summary.high++;
-        break;
-      case Severity.MEDIUM:
-        summary.medium++;
-        break;
-      case Severity.LOW:
-        summary.low++;
-        break;
-      case Severity.INFORMATIONAL:
-        summary.informational++;
-        break;
-    }
-
-    // Extract gas savings from description
-    const gasMatch = finding.description.match(/~?(\d+)(?:-(\d+))?\s*gas/i);
-    if (gasMatch) {
-      const low = parseInt(gasMatch[1]!, 10);
-      const high = gasMatch[2] ? parseInt(gasMatch[2], 10) : low;
-      totalGas += Math.floor((low + high) / 2);
-    }
-  }
-
-  // Format total savings
-  if (totalGas >= 1000000) {
-    summary.estimatedSavings = `${(totalGas / 1000000).toFixed(1)}M`;
-  } else if (totalGas >= 1000) {
-    summary.estimatedSavings = `${(totalGas / 1000).toFixed(1)}K`;
-  } else {
-    summary.estimatedSavings = totalGas.toString();
-  }
-
-  return summary;
-}
-
-/**
- * Calculate custom checks summary
- */
-function calculateCustomSummary(findings: Finding[], detectorsLoaded: number): CustomChecksSummary {
-  const summary: CustomChecksSummary = {
-    total: findings.length,
-    critical: 0,
-    high: 0,
-    medium: 0,
-    low: 0,
-    informational: 0,
-    detectorsLoaded,
-  };
-
-  for (const finding of findings) {
-    switch (finding.severity) {
-      case Severity.CRITICAL:
-        summary.critical++;
-        break;
-      case Severity.HIGH:
-        summary.high++;
-        break;
-      case Severity.MEDIUM:
-        summary.medium++;
-        break;
-      case Severity.LOW:
-        summary.low++;
-        break;
-      case Severity.INFORMATIONAL:
-        summary.informational++;
-        break;
-    }
-  }
-
-  return summary;
 }
 
 /**
@@ -846,7 +529,6 @@ function formatOutput(result: AnalysisResult): string {
     executionTime,
   } = result;
 
-  // Build text summary for quick reading
   const lines: string[] = [
     "═══════════════════════════════════════════════════════════════════════════════",
     `  SECURITY ANALYSIS REPORT: ${contractInfo.name}`,
@@ -948,7 +630,6 @@ function formatOutput(result: AnalysisResult): string {
       lines.push("");
       lines.push(`  ${emoji} [${finding.severity.toUpperCase()}] ${finding.title}`);
       lines.push(`     Location: ${location}`);
-      // Show full description, just clean up newlines
       const cleanDesc = finding.description.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
       lines.push(`     ${cleanDesc}`);
       if (
@@ -1023,22 +704,4 @@ function formatOutput(result: AnalysisResult): string {
   lines.push("═══════════════════════════════════════════════════════════════════════════════");
 
   return lines.join("\n");
-}
-
-/**
- * Get emoji for severity level
- */
-function getSeverityEmoji(severity: Severity): string {
-  switch (severity) {
-    case Severity.CRITICAL:
-      return "🔴";
-    case Severity.HIGH:
-      return "🟠";
-    case Severity.MEDIUM:
-      return "🟡";
-    case Severity.LOW:
-      return "🟢";
-    case Severity.INFORMATIONAL:
-      return "🔵";
-  }
 }

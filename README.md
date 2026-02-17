@@ -432,6 +432,9 @@ With API key authentication:
 | `/info` | GET | Server info and available tools |
 | `/sse` | GET | SSE connection for MCP |
 | `/message` | POST | Message handler for MCP |
+| `/api/analyze` | POST | Analyze contract from source code |
+| `/api/check` | POST | Quick vulnerability check from source |
+| `/api/ci/review` | POST | CI: Analyze & post inline PR comments |
 
 #### Health Check Response
 
@@ -1165,9 +1168,31 @@ npm run clean
 ```
 solidity-audit-mcp/
 ├── src/
-│   ├── index.ts              # MCP server entry point (stdio transport)
-│   ├── server.ts             # HTTP/SSE server for SaaS deployment
+│   ├── index.ts              # MCP server entry point (stdio) - ~40 lines
+│   ├── server.ts             # HTTP/SSE server entry point - ~280 lines
 │   ├── cli.ts                # CLI entry point (solidity-audit-cli)
+│   │
+│   ├── server/               # Server module (modular architecture)
+│   │   ├── index.ts          # Public API exports
+│   │   ├── config.ts         # Server configuration
+│   │   ├── McpServer.ts      # MCP server factory
+│   │   ├── schemas/          # Zod validation schemas
+│   │   ├── tools/            # MCP tool definitions
+│   │   ├── handlers/         # Tool & HTTP handlers
+│   │   ├── health/           # Health check logic
+│   │   └── middleware/       # Auth & CORS
+│   │
+│   ├── analyzers/            # Analyzer adapters (Adapter pattern)
+│   │   ├── IAnalyzer.ts      # Interface + BaseAnalyzer
+│   │   ├── AnalyzerRegistry.ts   # Factory + Registry
+│   │   ├── AnalyzerOrchestrator.ts # Parallel execution
+│   │   ├── adapters/         # Slither, Aderyn, Slang, Gas adapters
+│   │   ├── slither.ts        # Slither wrapper
+│   │   ├── aderyn.ts         # Aderyn wrapper
+│   │   ├── slangAnalyzer.ts  # AST parsing with @nomicfoundation/slang
+│   │   ├── gasOptimizer.ts   # Gas optimization
+│   │   └── diffAnalyzer.ts   # Contract diff analysis
+│   │
 │   ├── tools/                # MCP tool implementations
 │   │   ├── analyzeContract.ts
 │   │   ├── getContractInfo.ts
@@ -1177,48 +1202,65 @@ solidity-audit-mcp/
 │   │   ├── optimizeGas.ts
 │   │   ├── diffAudit.ts
 │   │   └── auditProject.ts
-│   ├── analyzers/            # Static analyzer wrappers
-│   │   ├── slither.ts
-│   │   ├── aderyn.ts
-│   │   ├── slangAnalyzer.ts  # AST parsing with @nomicfoundation/slang
-│   │   ├── gasOptimizer.ts
-│   │   └── diffAnalyzer.ts
+│   │
+│   ├── templates/            # Markdown report templates
+│   │   ├── index.ts          # Template utilities
+│   │   ├── reportTemplate.md
+│   │   ├── findingTemplate.md
+│   │   ├── prSummaryTemplate.md
+│   │   ├── prLineCommentTemplate.md
+│   │   └── diffAuditTemplate.md
+│   │
 │   ├── detectors/            # Custom detector system
 │   │   ├── customDetectorEngine.ts
 │   │   └── presets/          # Detector presets (web3, defi)
+│   │
 │   ├── ci/                   # CI/CD integration
 │   │   ├── index.ts
 │   │   └── githubComment.ts  # PR comment generator
+│   │
 │   ├── storage/              # Persistence layer
 │   │   ├── index.ts
 │   │   └── findingsDb.ts     # SQLite findings tracker
+│   │
 │   ├── types/                # TypeScript type definitions
 │   │   ├── index.ts
+│   │   ├── analyzer.ts       # Analyzer types
 │   │   ├── result.ts         # Rust-style Result<T, E> type
 │   │   └── tools.ts          # Tool registry pattern
+│   │
 │   └── utils/                # Utility functions
-│       ├── executor.ts
+│       ├── executor.ts       # Command execution
 │       ├── logger.ts         # Structured logging
-│       ├── cache.ts          # In-memory cache with TTL
-│       ├── pathValidation.ts # Path security validation
+│       ├── severity.ts       # Severity utilities
 │       └── sarif.ts          # SARIF report generator
+│
+├── __tests__/                # Test files (404 tests)
+│   ├── analyzers/            # Adapter & orchestrator tests
+│   ├── tools/                # Tool integration tests
+│   ├── ci/                   # GitHub comment tests
+│   ├── detectors/            # Custom detector tests
+│   ├── utils/                # Utility tests
+│   └── fixtures/             # Test Solidity contracts
+│
+├── docs/
+│   └── ARCHITECTURE.md       # Architecture guide with diagrams
+│
 ├── .github/
 │   ├── actions/audit/        # Reusable GitHub Action
 │   └── workflows/            # Example workflows
-├── __tests__/                # Test files
-│   ├── analyzers/
-│   ├── tools/
-│   ├── ci/
-│   ├── detectors/
-│   └── fixtures/             # Test Solidity contracts
-├── Dockerfile.saas         # SaaS deployment (HTTP/SSE)
-├── Dockerfile.dev          # Development with hot-reload
-├── docker/docker-compose.yml      # Local container orchestration
-├── docker/docker-compose.saas.yml # SaaS deployment orchestration
+│
+├── docker/
+│   ├── docker-compose.yml         # Local container orchestration
+│   └── docker-compose.saas.yml    # SaaS deployment orchestration
+│
+├── Dockerfile              # Local Docker (stdio)
+├── Dockerfile.saas         # SaaS Docker (HTTP/SSE)
 ├── .env.example            # Environment variables template
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts        # Test configuration
+├── CLAUDE.md               # Claude Code instructions
 └── README.md
 ```
 

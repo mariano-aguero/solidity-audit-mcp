@@ -46,16 +46,54 @@ npm run saas:logs        # View logs
 ## Architecture
 
 ### Entry Points
-- `src/index.ts` - MCP server (stdio transport) for local use with Claude Desktop
-- `src/server.ts` - HTTP/SSE server for remote/SaaS deployment
+- `src/index.ts` - Thin wrapper (~40 lines) for stdio transport
+- `src/server.ts` - Thin wrapper (~280 lines) for HTTP/SSE transport
 - `src/cli.ts` - CLI entry point using native `node:util` parseArgs
+
+### Server Module (`src/server/`)
+The server logic is modularized into reusable components:
+
+```
+src/server/
+├── index.ts              # Public exports
+├── config.ts             # Server configuration (name, version, env vars)
+├── McpServer.ts          # MCP server factory
+├── schemas/
+│   └── inputSchemas.ts   # Zod validation schemas (shared)
+├── tools/
+│   └── toolDefinitions.ts # MCP tool definitions (shared)
+├── handlers/
+│   ├── toolHandlers.ts   # Tool execution logic
+│   └── httpHandlers.ts   # REST API handlers
+├── health/
+│   └── healthCheck.ts    # Health check with analyzer status
+└── middleware/
+    ├── auth.ts           # API key authentication
+    └── cors.ts           # CORS configuration
+```
 
 ### Core Analysis Pipeline
 The main analysis in `src/tools/analyzeContract.ts`:
 1. Validates contract path and auto-detects project root
-2. Runs analyzers in parallel: Slither, Aderyn, Slang AST, Gas optimizer, Custom detectors
-3. Deduplicates findings across tools (`src/analyzers/aderyn.ts:deduplicateFindings`)
+2. Uses `AnalyzerOrchestrator` to run analyzers in parallel
+3. Deduplicates findings across tools
 4. Sorts by severity and formats output
+
+### Analyzer Architecture (`src/analyzers/`)
+Uses Adapter pattern for unified analyzer interface:
+
+```
+src/analyzers/
+├── IAnalyzer.ts          # Interface + BaseAnalyzer abstract class
+├── AnalyzerRegistry.ts   # Factory + Registry (singleton)
+├── AnalyzerOrchestrator.ts # Parallel execution coordinator
+├── types.ts              # Analyzer type definitions
+└── adapters/
+    ├── SlitherAdapter.ts
+    ├── AderynAdapter.ts
+    ├── SlangAdapter.ts
+    └── GasAdapter.ts
+```
 
 ### MCP Tools (8 total)
 - `analyze_contract` - Full security analysis pipeline
@@ -67,25 +105,28 @@ The main analysis in `src/tools/analyzeContract.ts`:
 - `diff_audit` - Compare two contract versions
 - `audit_project` - Scan entire project directory
 
-### Key Modules
-- `src/analyzers/slangAnalyzer.ts` - AST-based analysis using @nomicfoundation/slang, also handles contract parsing
-- `src/analyzers/slither.ts` / `aderyn.ts` - External tool wrappers with output parsing
-- `src/detectors/customDetectorEngine.ts` - User-defined detector patterns from `.audit-detectors.yml`
-- `src/storage/findingsDb.ts` - SQLite-based findings persistence (better-sqlite3)
-- `src/ci/githubComment.ts` - PR comment and SARIF report generation
+### Templates (`src/templates/`)
+Markdown templates for reports and PR comments:
+- `reportTemplate.md` - Full audit report
+- `findingTemplate.md` - Individual finding
+- `prSummaryTemplate.md` - PR summary comment
+- `prLineCommentTemplate.md` - Inline code comments
+- `diffAuditTemplate.md` - Diff audit report
+- `index.ts` - Template loading utilities
 
 ### Utilities
-- `src/utils/logger.ts` - Structured JSON logging to stderr (stdout reserved for MCP protocol)
-- `src/utils/executor.ts` - Command execution with timeout and project root detection
+- `src/utils/logger.ts` - Structured JSON logging to stderr
+- `src/utils/executor.ts` - Command execution with timeout
+- `src/utils/severity.ts` - Centralized severity utilities
 - `src/types/result.ts` - Rust-style `Result<T, E>` for error handling
-- `src/types/tools.ts` - Tool registry pattern with Zod validation
+- `src/types/analyzer.ts` - Analyzer type definitions
 
 ### External Tool Dependencies
 The server gracefully degrades when tools are missing:
 - **Slither** (Python) - 90+ vulnerability detectors
 - **Aderyn** (Rust) - Fast static analysis
 - **Foundry/forge** - Test execution and coverage
-- **solc-select** (Python) - Solidity version management (required by Slither)
+- **solc-select** (Python) - Solidity version management
 
 ## Testing
 
@@ -94,12 +135,20 @@ Tests use Vitest with fixtures in `__tests__/fixtures/` containing intentionally
 Test structure mirrors src/:
 ```
 __tests__/
-├── analyzers/   # Parser and analyzer tests
-├── tools/       # Tool integration tests
-├── detectors/   # Custom detector tests
-├── ci/          # GitHub comment generation tests
-└── fixtures/    # Test Solidity contracts
+├── analyzers/        # Parser, adapter, and orchestrator tests
+├── tools/            # Tool integration tests
+├── detectors/        # Custom detector tests
+├── ci/               # GitHub comment generation tests
+├── utils/            # Utility function tests
+└── fixtures/         # Test Solidity contracts
 ```
+
+## Adding New Analyzers
+
+1. Create adapter in `src/analyzers/adapters/YourAdapter.ts` implementing `IAnalyzer`
+2. Register in `src/analyzers/adapters/index.ts`
+3. Add to `AnalyzerRegistry` initialization
+4. Add tests in `__tests__/analyzers/adapters.test.ts`
 
 ## Adding New Detectors
 

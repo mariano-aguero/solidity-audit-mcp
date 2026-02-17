@@ -6,6 +6,10 @@
  */
 
 import { Finding, Severity } from "../types/index.js";
+import {
+  getSeverityEmoji as getSeverityEmojiUtil,
+  estimateGasSavings as estimateGasSavingsUtil,
+} from "../utils/severity.js";
 
 // ============================================================================
 // Types
@@ -101,16 +105,10 @@ export function getRiskEmoji(riskLevel: RiskLevel): string {
 
 /**
  * Get the emoji for a severity level.
+ * Re-exported from utils/severity for backwards compatibility.
  */
 export function getSeverityEmoji(severity: Severity): string {
-  const emojis: Record<Severity, string> = {
-    [Severity.CRITICAL]: "🔴",
-    [Severity.HIGH]: "🟠",
-    [Severity.MEDIUM]: "🟡",
-    [Severity.LOW]: "🟢",
-    [Severity.INFORMATIONAL]: "🔵",
-  };
-  return emojis[severity] ?? "⚪";
+  return getSeverityEmojiUtil(severity);
 }
 
 // ============================================================================
@@ -671,16 +669,10 @@ function escapeMarkdown(text: string): string {
 
 /**
  * Estimate gas savings based on severity.
+ * Delegates to utils/severity for the actual estimation.
  */
 function estimateGasSavings(severity: Severity): number {
-  const estimates: Record<Severity, number> = {
-    [Severity.CRITICAL]: 5000,
-    [Severity.HIGH]: 2000,
-    [Severity.MEDIUM]: 500,
-    [Severity.LOW]: 100,
-    [Severity.INFORMATIONAL]: 50,
-  };
-  return estimates[severity] ?? 100;
+  return estimateGasSavingsUtil(severity);
 }
 
 /**

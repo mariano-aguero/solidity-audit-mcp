@@ -256,3 +256,27 @@ export interface ChangeRiskAssessment {
   summary: string;
   recommendations: string[];
 }
+
+// ============================================================================
+// Re-export Analyzer Types
+// ============================================================================
+
+export type {
+  AnalyzerId,
+  AnalyzerCapabilities,
+  AnalyzerInput,
+  BaseAnalyzerOptions,
+  SlitherOptions,
+  AderynOptions,
+  SlangOptions,
+  GasOptions,
+  CustomDetectorOptions,
+  AnalyzerOptions,
+  AnalyzerMetadata,
+  AnalyzerResult,
+  AnalyzerStatus,
+  AnalyzerAvailability,
+  OrchestratorConfig,
+  OrchestratorResult,
+  AnalyzerRegistration,
+} from "./analyzer.js";

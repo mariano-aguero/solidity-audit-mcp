@@ -6,26 +6,6 @@
 
 export { logger, type LogLevel, type LogContext, type LogEntry, formatDuration } from "./logger.js";
 export {
-  Cache,
-  toolResultsCache,
-  fileHashCache,
-  contractInfoCache,
-  hashInput,
-  makeCacheKey,
-  memoize,
-  memoizeSync,
-} from "./cache.js";
-export {
-  validateContractPath,
-  validateFileExists,
-  validateExtension,
-  validateSolidityPath,
-  sanitizeFilename,
-  isPathSafe,
-  type PathValidationError,
-  type ValidatedPath,
-} from "./pathValidation.js";
-export {
   executeCommand,
   executeCommandSafe,
   executeWithAbort,
@@ -42,3 +22,17 @@ export {
   type ToolAvailability,
   type ExecuteError,
 } from "./executor.js";
+export {
+  countBySeverity,
+  sortBySeverity,
+  compareSeverity,
+  getSeverityEmoji,
+  estimateGasSavings,
+  extractGasSavings,
+  formatGasSavings,
+  calculateTotalGasSavings,
+  SEVERITY_ORDER,
+  SEVERITY_EMOJI,
+  SEVERITY_GAS_ESTIMATES,
+  type SeverityCounts,
+} from "./severity.js";

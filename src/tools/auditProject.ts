@@ -19,6 +19,7 @@ import {
 } from "../analyzers/projectScanner.js";
 import { analyzeContract, type AnalysisResult } from "./analyzeContract.js";
 import { executeCommand, formatDuration } from "../utils/executor.js";
+import { getSeverityEmoji } from "../utils/severity.js";
 import { Severity, type Finding } from "../types/index.js";
 import { logger } from "../utils/logger.js";
 
@@ -280,6 +281,7 @@ export async function auditProject(input: AuditProjectInput): Promise<string> {
 
 /**
  * Run async tasks with limited concurrency.
+ * Uses Promise.allSettled for safer handling of concurrent operations.
  */
 async function runWithConcurrency<T, R>(
   items: T[],
@@ -287,33 +289,29 @@ async function runWithConcurrency<T, R>(
   concurrency: number
 ): Promise<R[]> {
   const results: R[] = [];
-  const executing: Promise<void>[] = [];
+  let currentIndex = 0;
 
-  for (const item of items) {
-    const promise = fn(item).then((result) => {
-      results.push(result);
-    });
-
-    executing.push(promise);
-
-    if (executing.length >= concurrency) {
-      await Promise.race(executing);
-      // Remove completed promises
-      const completed = executing.filter((p) =>
-        // Check if promise is settled by racing with resolved promise
-        Promise.race([p, Promise.resolve("pending")]).then((r) => r !== "pending")
-      );
-      for (const done of completed) {
-        const idx = executing.indexOf(done);
-        if (idx !== -1) executing.splice(idx, 1);
-      }
+  // Process items in batches
+  async function processNext(): Promise<void> {
+    while (currentIndex < items.length) {
+      const index = currentIndex++;
+      const item = items[index]!;
+      const result = await fn(item);
+      results[index] = result;
     }
   }
 
-  // Wait for remaining
-  await Promise.all(executing);
+  // Start `concurrency` number of workers
+  const workers: Promise<void>[] = [];
+  for (let i = 0; i < Math.min(concurrency, items.length); i++) {
+    workers.push(processNext());
+  }
 
-  return results;
+  // Wait for all workers to complete
+  await Promise.allSettled(workers);
+
+  // Filter out any undefined results (shouldn't happen but safe)
+  return results.filter((r): r is R => r !== undefined);
 }
 
 // ============================================================================
@@ -663,6 +661,10 @@ function calculateOverallRisk(reports: ContractReport[], projectFindings: Findin
       case Severity.MEDIUM:
         totalMedium++;
         break;
+      case Severity.LOW:
+      case Severity.INFORMATIONAL:
+        // Not counted for overall risk calculation
+        break;
     }
   }
 
@@ -959,20 +961,7 @@ function getPriorityBadge(priority: AuditPriority): string {
   return badges[priority];
 }
 
-function getSeverityEmoji(severity: Severity): string {
-  switch (severity) {
-    case Severity.CRITICAL:
-      return "🔴";
-    case Severity.HIGH:
-      return "🟠";
-    case Severity.MEDIUM:
-      return "🟡";
-    case Severity.LOW:
-      return "🟢";
-    case Severity.INFORMATIONAL:
-      return "🔵";
-  }
-}
+// getSeverityEmoji is now imported from ../utils/severity.js
 
 function collectTopFindings(result: AuditProjectResult): Finding[] {
   const allFindings: Finding[] = [];
