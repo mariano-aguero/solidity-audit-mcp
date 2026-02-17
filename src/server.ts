@@ -30,6 +30,16 @@ import { execa } from "execa";
 
 import { logger } from "./utils/logger.js";
 
+// CI integration imports
+import {
+  postReviewComments,
+  postPRComment,
+  createAuditResults,
+  type ReviewOptions,
+  type CommentOptions,
+} from "./ci/index.js";
+import { Severity, type Finding } from "./types/index.js";
+
 // Tool imports
 import { analyzeContract } from "./tools/analyzeContract.js";
 import { getContractInfo } from "./tools/getContractInfo.js";
@@ -564,6 +574,217 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
 
+  // REST API: CI Review - Analyze and post inline review comments
+  if (pathname === "/api/ci/review" && req.method === "POST") {
+    if (!checkAuth(req)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Unauthorized" }));
+      return;
+    }
+
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(chunk as Buffer);
+      }
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+
+      const { files, github } = body;
+
+      // Validate required fields
+      if (!files || !Array.isArray(files) || files.length === 0) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Missing 'files' array with contract files" }));
+        return;
+      }
+
+      if (!github || !github.owner || !github.repo || !github.prNumber || !github.token || !github.commitSha) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          error: "Missing 'github' object with owner, repo, prNumber, commitSha, and token"
+        }));
+        return;
+      }
+
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const os = await import("node:os");
+
+      logger.info(`CI Review request`, {
+        filesCount: files.length,
+        owner: github.owner,
+        repo: github.repo,
+        prNumber: github.prNumber,
+      });
+
+      // Create temporary directory for all files
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-ci-review-"));
+      const allFindings: Finding[] = [];
+      const allGasOptimizations: Finding[] = [];
+      const analysisResults: Array<{ filename: string; findingsCount: number; error?: string }> = [];
+
+      // Analyze each file
+      for (const file of files) {
+        const { filename, source } = file;
+
+        if (!filename || !source) {
+          analysisResults.push({ filename: filename || "unknown", findingsCount: 0, error: "Missing filename or source" });
+          continue;
+        }
+
+        try {
+          // Create file in temp directory preserving path structure
+          const contractPath = path.join(tmpDir, filename);
+          await fs.mkdir(path.dirname(contractPath), { recursive: true });
+          await fs.writeFile(contractPath, source);
+
+          // Run analyzers directly to get structured findings
+          const { runSlither } = await import("./analyzers/slither.js");
+          const { runAderyn } = await import("./analyzers/aderyn.js");
+
+          const [slitherFindings, aderynFindings] = await Promise.allSettled([
+            runSlither(contractPath, tmpDir).catch(() => []),
+            runAderyn(contractPath, tmpDir).catch(() => []),
+          ]);
+
+          const findings: Finding[] = [];
+
+          if (slitherFindings.status === "fulfilled") {
+            // Adjust paths to be relative to repo root
+            for (const f of slitherFindings.value) {
+              f.location.file = filename;
+              findings.push(f);
+            }
+          }
+
+          if (aderynFindings.status === "fulfilled") {
+            for (const f of aderynFindings.value) {
+              f.location.file = filename;
+              findings.push(f);
+            }
+          }
+
+          // Run Slang analysis
+          try {
+            const { analyzeWithSlang } = await import("./analyzers/slangAnalyzer.js");
+            const slangResult = await analyzeWithSlang(source, contractPath, { includeInformational: false });
+            for (const f of slangResult.findings) {
+              f.location.file = filename;
+              findings.push(f);
+            }
+          } catch {
+            // Slang analysis failed, continue
+          }
+
+          allFindings.push(...findings);
+          analysisResults.push({ filename, findingsCount: findings.length });
+
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          analysisResults.push({ filename, findingsCount: 0, error: errorMsg });
+          logger.error(`Analysis failed for ${filename}`, { error: errorMsg });
+        }
+      }
+
+      // Cleanup temp directory
+      await fs.rm(tmpDir, { recursive: true, force: true });
+
+      // Deduplicate findings based on file, line, and title
+      const uniqueFindings = deduplicateFindingsByLocation(allFindings);
+
+      // Sort by severity
+      uniqueFindings.sort((a, b) => {
+        const severityOrder: Record<Severity, number> = {
+          [Severity.CRITICAL]: 0,
+          [Severity.HIGH]: 1,
+          [Severity.MEDIUM]: 2,
+          [Severity.LOW]: 3,
+          [Severity.INFORMATIONAL]: 4,
+        };
+        return severityOrder[a.severity] - severityOrder[b.severity];
+      });
+
+      // Post inline review comments
+      const reviewOptions: ReviewOptions = {
+        owner: github.owner,
+        repo: github.repo,
+        prNumber: github.prNumber,
+        token: github.token,
+        commitSha: github.commitSha,
+        event: uniqueFindings.some(f => f.severity === Severity.CRITICAL || f.severity === Severity.HIGH)
+          ? "REQUEST_CHANGES"
+          : "COMMENT",
+      };
+
+      let reviewResult = { reviewId: 0, commentsPosted: 0 };
+
+      try {
+        reviewResult = await postReviewComments(uniqueFindings, reviewOptions);
+        logger.info(`Review posted`, {
+          reviewId: reviewResult.reviewId,
+          commentsPosted: reviewResult.commentsPosted,
+        });
+      } catch (reviewErr) {
+        const errorMsg = reviewErr instanceof Error ? reviewErr.message : String(reviewErr);
+        logger.error(`Failed to post review comments`, { error: errorMsg });
+      }
+
+      // Also post a summary comment
+      const auditResults = createAuditResults(uniqueFindings, allGasOptimizations);
+      const commentOptions: CommentOptions = {
+        owner: github.owner,
+        repo: github.repo,
+        prNumber: github.prNumber,
+        token: github.token,
+        prUrl: `https://github.com/${github.owner}/${github.repo}/pull/${github.prNumber}`,
+      };
+
+      let summaryResult = { commentId: 0, updated: false };
+
+      try {
+        summaryResult = await postPRComment(auditResults, commentOptions);
+        logger.info(`Summary comment posted`, {
+          commentId: summaryResult.commentId,
+          updated: summaryResult.updated,
+        });
+      } catch (commentErr) {
+        const errorMsg = commentErr instanceof Error ? commentErr.message : String(commentErr);
+        logger.error(`Failed to post summary comment`, { error: errorMsg });
+      }
+
+      // Return results
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        success: true,
+        summary: {
+          filesAnalyzed: files.length,
+          totalFindings: uniqueFindings.length,
+          critical: uniqueFindings.filter(f => f.severity === Severity.CRITICAL).length,
+          high: uniqueFindings.filter(f => f.severity === Severity.HIGH).length,
+          medium: uniqueFindings.filter(f => f.severity === Severity.MEDIUM).length,
+          low: uniqueFindings.filter(f => f.severity === Severity.LOW).length,
+          informational: uniqueFindings.filter(f => f.severity === Severity.INFORMATIONAL).length,
+        },
+        review: {
+          reviewId: reviewResult.reviewId,
+          inlineCommentsPosted: reviewResult.commentsPosted,
+        },
+        summaryComment: {
+          commentId: summaryResult.commentId,
+          updated: summaryResult.updated,
+        },
+        files: analysisResults,
+      }));
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error("CI Review error", { error: errorMessage });
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: errorMessage }));
+    }
+    return;
+  }
+
   // SSE endpoint - check auth
   if (pathname === "/sse" && req.method === "GET") {
     if (!checkAuth(req)) {
@@ -629,6 +850,41 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 }
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Deduplicate findings based on file, line, and title similarity
+ */
+function deduplicateFindingsByLocation(findings: Finding[]): Finding[] {
+  const seen = new Map<string, Finding>();
+
+  for (const finding of findings) {
+    const line = finding.location.lines?.[0] ?? 0;
+    const key = `${finding.location.file}:${line}:${finding.title.toLowerCase().slice(0, 30)}`;
+
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, finding);
+    } else {
+      // Keep the one with higher severity
+      const severityOrder: Record<Severity, number> = {
+        [Severity.CRITICAL]: 0,
+        [Severity.HIGH]: 1,
+        [Severity.MEDIUM]: 2,
+        [Severity.LOW]: 3,
+        [Severity.INFORMATIONAL]: 4,
+      };
+      if (severityOrder[finding.severity] < severityOrder[existing.severity]) {
+        seen.set(key, finding);
+      }
+    }
+  }
+
+  return Array.from(seen.values());
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -660,8 +916,9 @@ httpServer.listen(PORT, HOST, () => {
 ║    POST /message      - Message handler (MCP)                  ║
 ╠════════════════════════════════════════════════════════════════╣
 ║  REST API:                                                     ║
-║    POST /api/analyze  - Analyze contract from source           ║
-║    POST /api/check    - Quick vulnerability check              ║
+║    POST /api/analyze    - Analyze contract from source         ║
+║    POST /api/check      - Quick vulnerability check            ║
+║    POST /api/ci/review  - CI: Analyze & post inline comments   ║
 ╠════════════════════════════════════════════════════════════════╣
 ║  Health:                                                       ║
 ║    GET  /health       - Full health + analyzer status          ║
