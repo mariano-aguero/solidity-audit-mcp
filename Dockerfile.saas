@@ -46,24 +46,39 @@ RUN pip3 install --no-cache-dir \
     slither-analyzer \
     solc-select
 
-# Install common Solidity versions
-RUN solc-select install 0.8.28 0.8.24 0.8.20 0.8.19 0.8.17 0.8.13 0.8.0 0.7.6 0.6.12 \
-    && solc-select use 0.8.28
+# Install common Solidity versions (solc-select handles architecture)
+# Note: On ARM64, some older versions may not be available
+RUN ARCH=$(dpkg --print-architecture) \
+    && if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then \
+         echo "ARM64 detected - installing available solc versions" \
+         && solc-select install 0.8.28 0.8.24 0.8.20 || true \
+         && solc-select use 0.8.28 || solc-select use 0.8.24 || solc-select use 0.8.20; \
+       else \
+         solc-select install 0.8.28 0.8.24 0.8.20 0.8.19 0.8.17 0.8.13 0.8.0 0.7.6 0.6.12 \
+         && solc-select use 0.8.28; \
+       fi
 
 # Install Foundry
 RUN curl -L https://foundry.paradigm.xyz | bash \
     && /root/.foundry/bin/foundryup
 ENV PATH="/root/.foundry/bin:$PATH"
 
-# Install Aderyn from pre-built binary (avoids Rust compilation issues)
-# Download latest release from GitHub
+# Install Aderyn from pre-built binary (supports both ARM64 and x86_64)
+# Download latest release from GitHub based on architecture
 RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
     && ADERYN_VERSION=$(curl -s https://api.github.com/repos/Cyfrin/aderyn/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') \
     && echo "Installing Aderyn $ADERYN_VERSION" \
-    && curl -L "https://github.com/Cyfrin/aderyn/releases/download/${ADERYN_VERSION}/aderyn-x86_64-unknown-linux-gnu.tar.xz" -o /tmp/aderyn.tar.xz \
+    && ARCH=$(dpkg --print-architecture) \
+    && if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then \
+         ADERYN_ARCH="aarch64-unknown-linux-gnu"; \
+       else \
+         ADERYN_ARCH="x86_64-unknown-linux-gnu"; \
+       fi \
+    && echo "Downloading Aderyn for $ADERYN_ARCH" \
+    && curl -L "https://github.com/Cyfrin/aderyn/releases/download/${ADERYN_VERSION}/aderyn-${ADERYN_ARCH}.tar.xz" -o /tmp/aderyn.tar.xz \
     && tar -xJf /tmp/aderyn.tar.xz -C /tmp \
-    && mv /tmp/aderyn-x86_64-unknown-linux-gnu/aderyn /usr/local/bin/aderyn \
-    && rm -rf /tmp/aderyn.tar.xz /tmp/aderyn-x86_64-unknown-linux-gnu \
+    && mv /tmp/aderyn-${ADERYN_ARCH}/aderyn /usr/local/bin/aderyn \
+    && rm -rf /tmp/aderyn.tar.xz /tmp/aderyn-${ADERYN_ARCH} \
     && chmod +x /usr/local/bin/aderyn
 
 # Create app directory

@@ -151,14 +151,38 @@ describe("generateFindingsTable", () => {
     expect(result).toContain("contracts/Test.sol");
   });
 
-  it("should truncate at maxItems", () => {
+  it("should show remaining findings in collapsible section", () => {
     const findings = Array(25)
       .fill(null)
       .map((_, i) => createTestFinding({ id: `finding-${i}`, title: `Finding ${i}` }));
 
     const result = generateFindingsTable(findings, 20);
 
-    expect(result).toContain("...and 5 more findings");
+    // Should use collapsible details section
+    expect(result).toContain("<details>");
+    expect(result).toContain("Show 5 more findings");
+    expect(result).toContain("</details>");
+  });
+
+  it("should sort findings by severity (critical first)", () => {
+    const findings = [
+      createTestFinding({ severity: Severity.LOW, title: "Low Issue" }),
+      createTestFinding({ severity: Severity.CRITICAL, title: "Critical Issue" }),
+      createTestFinding({ severity: Severity.MEDIUM, title: "Medium Issue" }),
+      createTestFinding({ severity: Severity.HIGH, title: "High Issue" }),
+    ];
+
+    const result = generateFindingsTable(findings);
+
+    // Critical should appear before High, which appears before Medium, etc.
+    const criticalIndex = result.indexOf("Critical Issue");
+    const highIndex = result.indexOf("High Issue");
+    const mediumIndex = result.indexOf("Medium Issue");
+    const lowIndex = result.indexOf("Low Issue");
+
+    expect(criticalIndex).toBeLessThan(highIndex);
+    expect(highIndex).toBeLessThan(mediumIndex);
+    expect(mediumIndex).toBeLessThan(lowIndex);
   });
 
   it("should escape markdown characters", () => {
@@ -282,7 +306,7 @@ describe("generatePRComment", () => {
 
     // Check summary
     expect(result).toContain("**Risk Level:** 🟠 HIGH");
-    expect(result).toContain("0 critical, 1 high, 2 medium");
+    expect(result).toContain("0 critical, 1 high, 2 medium, 0 low");
 
     // Check sections
     expect(result).toContain("Security Findings (3)");
@@ -328,6 +352,48 @@ describe("generatePRComment", () => {
 
     expect(result).toContain("CLEAN");
     expect(result).toContain("✅");
+  });
+
+  it("should include inline comments note when provided", () => {
+    const results: AuditResults = {
+      summary: createTestSummary({
+        high: 5,
+        medium: 10,
+        low: 20,
+      }),
+      findings: Array(35)
+        .fill(null)
+        .map((_, i) => createTestFinding({ id: `finding-${i}` })),
+      gasOptimizations: [],
+    };
+
+    // 35 total findings, only 10 posted as inline comments
+    const result = generatePRComment(results, undefined, 10);
+
+    expect(result).toContain("10 inline comments posted on changed lines");
+    expect(result).toContain("25 additional findings are in unchanged code");
+  });
+
+  it("should not show inline comments note when all comments posted", () => {
+    const results: AuditResults = {
+      summary: createTestSummary({
+        critical: 0,
+        high: 2,
+        medium: 0,
+        low: 0,
+        informational: 0,
+      }),
+      findings: [
+        createTestFinding({ id: "1", severity: Severity.HIGH }),
+        createTestFinding({ id: "2", severity: Severity.HIGH }),
+      ],
+      gasOptimizations: [],
+    };
+
+    // All findings posted as inline comments (2 of 2)
+    const result = generatePRComment(results, undefined, 2);
+
+    expect(result).not.toContain("inline comments posted");
   });
 });
 

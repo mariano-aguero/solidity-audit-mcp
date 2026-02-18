@@ -117,11 +117,9 @@ export async function runAderyn(
       args.push("--scope", options.scope);
     }
 
-    // Add exclude paths
+    // Add exclude paths (comma-separated, no spaces)
     if (options.exclude && options.exclude.length > 0) {
-      for (const path of options.exclude) {
-        args.push("--exclude", path);
-      }
+      args.push("--path-excludes", options.exclude.join(","));
     }
 
     logger.info(`[aderyn] Running: aderyn ${args.join(" ")}`);

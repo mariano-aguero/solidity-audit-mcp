@@ -116,19 +116,32 @@ export function getSeverityEmoji(severity: Severity): string {
 // ============================================================================
 
 /**
- * Generate a markdown table for security findings.
+ * Generate a markdown table for security findings, grouped by severity.
  */
-export function generateFindingsTable(findings: Finding[], maxItems = 20): string {
+export function generateFindingsTable(findings: Finding[], maxItems = 50): string {
   if (findings.length === 0) {
     return "_No security findings detected_";
   }
+
+  // Sort by severity (CRITICAL first, then HIGH, MEDIUM, LOW, INFORMATIONAL)
+  const severityOrder: Record<Severity, number> = {
+    [Severity.CRITICAL]: 0,
+    [Severity.HIGH]: 1,
+    [Severity.MEDIUM]: 2,
+    [Severity.LOW]: 3,
+    [Severity.INFORMATIONAL]: 4,
+  };
+
+  const sortedFindings = [...findings].sort(
+    (a, b) => severityOrder[a.severity] - severityOrder[b.severity]
+  );
 
   const lines: string[] = [
     "| Severity | Title | Location | Detector |",
     "|:--------:|-------|----------|----------|",
   ];
 
-  const displayFindings = findings.slice(0, maxItems);
+  const displayFindings = sortedFindings.slice(0, maxItems);
   for (const finding of displayFindings) {
     const emoji = getSeverityEmoji(finding.severity);
     const severity = `${emoji} ${finding.severity.toUpperCase()}`;
@@ -142,7 +155,21 @@ export function generateFindingsTable(findings: Finding[], maxItems = 20): strin
 
   if (findings.length > maxItems) {
     lines.push("");
-    lines.push(`_...and ${findings.length - maxItems} more findings_`);
+    lines.push(`<details><summary>📋 Show ${findings.length - maxItems} more findings</summary>\n`);
+    lines.push("| Severity | Title | Location | Detector |");
+    lines.push("|:--------:|-------|----------|----------|");
+
+    for (const finding of sortedFindings.slice(maxItems)) {
+      const emoji = getSeverityEmoji(finding.severity);
+      const severity = `${emoji} ${finding.severity.toUpperCase()}`;
+      const title = escapeMarkdown(finding.title);
+      const location = finding.location.file
+        ? `\`${finding.location.file}:${finding.location.lines?.[0] ?? "?"}\``
+        : "_Unknown_";
+      const detector = `\`${finding.detector}\``;
+      lines.push(`| ${severity} | ${title} | ${location} | ${detector} |`);
+    }
+    lines.push("\n</details>");
   }
 
   return lines.join("\n");
@@ -224,7 +251,11 @@ export function generateDiffSection(diffResults: DiffResults): string {
 /**
  * Generate the full PR comment markdown.
  */
-export function generatePRComment(results: AuditResults, prUrl?: string): string {
+export function generatePRComment(
+  results: AuditResults,
+  prUrl?: string,
+  inlineCommentsPosted?: number
+): string {
   const riskLevel = determineRiskLevel(results.summary);
   const badge = getRiskBadge(riskLevel);
   const riskEmoji = getRiskEmoji(riskLevel);
@@ -247,12 +278,26 @@ export function generatePRComment(results: AuditResults, prUrl?: string): string
   // Summary metrics
   lines.push(`**Risk Level:** ${riskEmoji}`);
   lines.push(
-    `**Findings:** ${results.summary.critical} critical, ${results.summary.high} high, ${results.summary.medium} medium`
+    `**Findings:** ${results.summary.critical} critical, ${results.summary.high} high, ${results.summary.medium} medium, ${results.summary.low} low`
   );
-  lines.push(
-    `**Gas Optimizations:** ${results.gasOptimizations.length} suggestions (~${results.summary.estimatedGasSavings} gas savings)`
-  );
+
+  // Show gas optimizations with meaningful display
+  if (results.gasOptimizations.length > 0) {
+    lines.push(
+      `**Gas Optimizations:** ${results.gasOptimizations.length} suggestions (~${results.summary.estimatedGasSavings.toLocaleString()} gas savings)`
+    );
+  }
   lines.push("");
+
+  // Inline comments note (only if applicable)
+  if (inlineCommentsPosted !== undefined && inlineCommentsPosted < totalFindings) {
+    lines.push(
+      `> 📝 **Note:** ${inlineCommentsPosted} inline comments posted on changed lines. ` +
+        `${totalFindings - inlineCommentsPosted} additional findings are in unchanged code (see details below).`
+    );
+    lines.push("");
+  }
+
   lines.push("---");
   lines.push("");
 
@@ -540,11 +585,12 @@ async function createReview(
  */
 export async function postPRComment(
   results: AuditResults,
-  options: CommentOptions
+  options: CommentOptions,
+  inlineCommentsPosted?: number
 ): Promise<{ commentId: number; updated: boolean }> {
   const { owner, repo, prNumber, token, prUrl } = options;
 
-  const commentBody = generatePRComment(results, prUrl);
+  const commentBody = generatePRComment(results, prUrl, inlineCommentsPosted);
 
   // Find existing comment
   const existingComment = await findExistingComment(owner, repo, prNumber, token);
@@ -701,6 +747,33 @@ export function createAuditResults(
     findings,
     gasOptimizations,
     diffResults,
+  };
+}
+
+/**
+ * Post a complete audit review: inline comments + summary comment.
+ * This is the recommended way to post audit results to a PR.
+ */
+export async function postFullAuditReview(
+  results: AuditResults,
+  options: ReviewOptions
+): Promise<{
+  reviewId: number;
+  commentId: number;
+  inlineCommentsPosted: number;
+  updated: boolean;
+}> {
+  // First, post inline review comments on changed lines
+  const { reviewId, commentsPosted } = await postReviewComments(results.findings, options);
+
+  // Then, post the summary comment with inline comment count
+  const { commentId, updated } = await postPRComment(results, options, commentsPosted);
+
+  return {
+    reviewId,
+    commentId,
+    inlineCommentsPosted: commentsPosted,
+    updated,
   };
 }
 
