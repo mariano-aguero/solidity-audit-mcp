@@ -750,7 +750,7 @@ const SWC_PATTERNS: SWCPattern[] = [
       /function\s+\w+\s*\([^)]*\[\s*\]\s*(?:calldata|memory)?\s+(\w+)[^)]*\[\s*\]\s*(?:calldata|memory)?\s+(\w+)[^)]*\)\s*(?:external|public|internal|private)?[^{]*\{(?:(?!require\s*\(\s*\1\.length\s*==\s*\2\.length)(?!require\s*\(\s*\2\.length\s*==\s*\1\.length)(?!if\s*\(\s*\1\.length\s*!=\s*\2\.length)(?!if\s*\(\s*\2\.length\s*!=\s*\1\.length)[\s\S])*?\}/gs,
     ],
     remediation:
-      "Always validate array lengths match at the start of the function: require(array1.length == array2.length, \"Length mismatch\");",
+      'Always validate array lengths match at the start of the function: require(array1.length == array2.length, "Length mismatch");',
     references: [
       "https://github.com/crytic/slither/wiki/Detector-Documentation",
       "https://consensys.github.io/smart-contract-best-practices/development-recommendations/solidity-specific/complex-inheritance/",
@@ -861,9 +861,7 @@ const SWC_PATTERNS: SWCPattern[] = [
       // Contract with Initializable but constructor doesn't have _disableInitializers
       /contract\s+\w+[^{]*Initializable[^{]*\{[\s\S]*?constructor\s*\([^)]*\)\s*\{[^}]*\}/gs,
     ],
-    negativePatterns: [
-      /_disableInitializers\s*\(\s*\)/g,
-    ],
+    negativePatterns: [/_disableInitializers\s*\(\s*\)/g],
     remediation:
       "Add _disableInitializers() call in the constructor: " +
       "constructor() { _disableInitializers(); }",
@@ -886,11 +884,7 @@ const SWC_PATTERNS: SWCPattern[] = [
       // State change followed by external call without reentrancy guard
       /(?:balanceOf|totalSupply|allowance)\s*\[[^\]]+\]\s*(?:\+|-)=[\s\S]*?\w+\s*\([^)]*\)\s*\.\s*\w+\s*\([^)]*\)\s*;/gs,
     ],
-    negativePatterns: [
-      /nonReentrant/g,
-      /ReentrancyGuard/g,
-      /_nonReentrant/g,
-    ],
+    negativePatterns: [/nonReentrant/g, /ReentrancyGuard/g, /_nonReentrant/g],
     remediation:
       "Follow Checks-Effects-Interactions pattern: perform all state changes before external calls. " +
       "Consider using OpenZeppelin's ReentrancyGuard.",
@@ -911,8 +905,8 @@ const SWC_PATTERNS: SWCPattern[] = [
     severity: Severity.HIGH,
     patterns: [
       // Price variable used in arithmetic with debt/collateral calculations
-      /price\s*[\*\/][\s\S]*?(?:collateral|debt|liquidat|borrow|lend)/gis,
-      /(?:collateral|debt|liquidat|borrow|lend)[\s\S]*?price\s*[\*\/]/gis,
+      /price\s*[*/][\s\S]*?(?:collateral|debt|liquidat|borrow|lend)/gis,
+      /(?:collateral|debt|liquidat|borrow|lend)[\s\S]*?price\s*[*/]/gis,
       // getPrice/latestAnswer followed by state changes
       /(?:getPrice|latestAnswer|latestRoundData)\s*\([^)]*\)[\s\S]*?(?:\w+\s*(?:\+|-|\*|\/)?=)/gs,
       // Direct reserve/balance reads for pricing
@@ -956,7 +950,7 @@ const SWC_PATTERNS: SWCPattern[] = [
       /revert\s+ZeroAddress/g,
     ],
     remediation:
-      "Add zero address validation: require(addr != address(0), \"Zero address\"); " +
+      'Add zero address validation: require(addr != address(0), "Zero address"); ' +
       "Or use custom errors: if (addr == address(0)) revert ZeroAddress();",
     references: [
       "https://consensys.github.io/smart-contract-best-practices/development-recommendations/solidity-specific/zero-address/",
@@ -978,9 +972,7 @@ const SWC_PATTERNS: SWCPattern[] = [
       // Direct assignment to critical variables without event
       /(?:owner|admin|paused|feeRate|treasury)\s*=\s*[^;]+;(?:(?!emit)[\s\S])*?\}/gs,
     ],
-    negativePatterns: [
-      /emit\s+\w+/g,
-    ],
+    negativePatterns: [/emit\s+\w+/g],
     remediation:
       "Emit an event after critical state changes: " +
       "emit DelegateChanged(msg.sender, oldDelegate, newDelegate);",
@@ -1007,9 +999,7 @@ const SWC_PATTERNS: SWCPattern[] = [
       "Fetch fresh price data immediately before use. " +
       "Add staleness checks for oracle data. " +
       "Consider using Chainlink's latestRoundData with round validation.",
-    references: [
-      "https://docs.chain.link/data-feeds/price-feeds",
-    ],
+    references: ["https://docs.chain.link/data-feeds/price-feeds"],
   },
 
   // CUSTOM-008: Liquidation Threshold Without Slippage Protection
@@ -1027,18 +1017,11 @@ const SWC_PATTERNS: SWCPattern[] = [
       // Liquidation threshold check without bounds
       /LIQUIDATION_THRESHOLD[\s\S]*?\/\s*\(?price/gis,
     ],
-    negativePatterns: [
-      /minOutput/g,
-      /slippage/g,
-      /maxSlippage/g,
-      /deadline/g,
-    ],
+    negativePatterns: [/minOutput/g, /slippage/g, /maxSlippage/g, /deadline/g],
     remediation:
       "Add slippage protection parameters (minOutput, deadline). " +
       "Use price bounds or TWAP for liquidation calculations.",
-    references: [
-      "https://blog.chain.link/defi-security-best-practices/",
-    ],
+    references: ["https://blog.chain.link/defi-security-best-practices/"],
   },
 
   // CUSTOM-009: Double Approval in Multisig
@@ -1061,7 +1044,7 @@ const SWC_PATTERNS: SWCPattern[] = [
     ],
     remediation:
       "Check if the signer has already approved before incrementing: " +
-      "require(!hasApproved[id][msg.sender], \"Already approved\");",
+      'require(!hasApproved[id][msg.sender], "Already approved");',
     references: [
       "https://consensys.github.io/smart-contract-best-practices/development-recommendations/general/access-control/",
     ],
@@ -1089,7 +1072,7 @@ const SWC_PATTERNS: SWCPattern[] = [
     ],
     remediation:
       "Track execution status and check before executing: " +
-      "require(!executed[id], \"Already executed\"); executed[id] = true;",
+      'require(!executed[id], "Already executed"); executed[id] = true;',
     references: [
       "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/governance/TimelockController.sol",
     ],
@@ -1120,10 +1103,7 @@ const SWC_PATTERNS: SWCPattern[] = [
       "Use EIP-712 typed data signing with domain separator including chainId. " +
       "Track used nonces: require(nonce == nonces[signer]++); " +
       "Or track used signatures: require(!usedSignatures[sig]); usedSignatures[sig] = true;",
-    references: [
-      "https://eips.ethereum.org/EIPS/eip-712",
-      "https://swcregistry.io/docs/SWC-121",
-    ],
+    references: ["https://eips.ethereum.org/EIPS/eip-712", "https://swcregistry.io/docs/SWC-121"],
   },
 
   // CUSTOM-012: Signature Malleability Risk
@@ -1171,15 +1151,11 @@ const SWC_PATTERNS: SWCPattern[] = [
       // encodePacked in signature hash creation
       /abi\.encodePacked\s*\([^)]*signature[^)]*\)/gi,
     ],
-    negativePatterns: [
-      /abi\.encode\s*\(/g,
-    ],
+    negativePatterns: [/abi\.encode\s*\(/g],
     remediation:
       "Use abi.encode instead of abi.encodePacked for hashing: " +
       "keccak256(abi.encode(param1, param2, param3));",
-    references: [
-      "https://swcregistry.io/docs/SWC-133",
-    ],
+    references: ["https://swcregistry.io/docs/SWC-133"],
   },
 
   // CUSTOM-014: Flash Loan/Mint Without Proper Repayment
@@ -1197,11 +1173,7 @@ const SWC_PATTERNS: SWCPattern[] = [
       // totalSupply increase without corresponding decrease
       /totalSupply\s*\+=[\s\S]*?\.on(?:Flash|Loan)[\s\S]*?(?!totalSupply\s*-=)/gs,
     ],
-    negativePatterns: [
-      /burn\s*\(/g,
-      /_burn\s*\(/g,
-      /totalSupply\s*-=/g,
-    ],
+    negativePatterns: [/burn\s*\(/g, /_burn\s*\(/g, /totalSupply\s*-=/g],
     remediation:
       "Flash mints must burn the minted tokens after the callback. " +
       "Flash loans must verify actual token return, not just balance. " +
@@ -1258,11 +1230,9 @@ const SWC_PATTERNS: SWCPattern[] = [
     ],
     remediation:
       "Add a deadline parameter and validate it: " +
-      "require(block.timestamp <= deadline, \"Signature expired\"); " +
+      'require(block.timestamp <= deadline, "Signature expired"); ' +
       "Consider implementing EIP-2612 for permit functionality.",
-    references: [
-      "https://eips.ethereum.org/EIPS/eip-2612",
-    ],
+    references: ["https://eips.ethereum.org/EIPS/eip-2612"],
   },
 
   // CUSTOM-017: Missing Access Control on Critical Function
@@ -1287,9 +1257,7 @@ const SWC_PATTERNS: SWCPattern[] = [
     ],
     remediation:
       "Add access control: require(msg.sender == owner) or use OpenZeppelin's Ownable/AccessControl.",
-    references: [
-      "https://docs.openzeppelin.com/contracts/access-control",
-    ],
+    references: ["https://docs.openzeppelin.com/contracts/access-control"],
   },
 ];
 
