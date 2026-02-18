@@ -736,6 +736,561 @@ const SWC_PATTERNS: SWCPattern[] = [
       "Never store sensitive data on-chain. Use hash commitments or off-chain storage with proofs.",
     references: ["https://swcregistry.io/docs/SWC-136"],
   },
+
+  // CUSTOM-001: Array Length Mismatch
+  {
+    id: "CUSTOM-001",
+    title: "Array Length Mismatch",
+    description:
+      "Functions accepting multiple array parameters without validating their lengths are equal. " +
+      "This can lead to out-of-bounds access, incorrect data processing, or denial of service.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Function with two array parameters (common patterns)
+      /function\s+\w+\s*\([^)]*\[\s*\]\s*(?:calldata|memory)?\s+(\w+)[^)]*\[\s*\]\s*(?:calldata|memory)?\s+(\w+)[^)]*\)\s*(?:external|public|internal|private)?[^{]*\{(?:(?!require\s*\(\s*\1\.length\s*==\s*\2\.length)(?!require\s*\(\s*\2\.length\s*==\s*\1\.length)(?!if\s*\(\s*\1\.length\s*!=\s*\2\.length)(?!if\s*\(\s*\2\.length\s*!=\s*\1\.length)[\s\S])*?\}/gs,
+    ],
+    remediation:
+      "Always validate array lengths match at the start of the function: require(array1.length == array2.length, \"Length mismatch\");",
+    references: [
+      "https://github.com/crytic/slither/wiki/Detector-Documentation",
+      "https://consensys.github.io/smart-contract-best-practices/development-recommendations/solidity-specific/complex-inheritance/",
+    ],
+  },
+
+  // CUSTOM-002: Proxy Storage Collision Risk (Missing Gap)
+  {
+    id: "CUSTOM-002",
+    title: "Proxy Storage Collision Risk - Missing Gap",
+    description:
+      "Upgradeable contracts using proxy patterns must maintain consistent storage layout. " +
+      "Adding new state variables in the wrong position or changing variable order can corrupt storage. " +
+      "The __gap pattern should be used, and new variables should only be added at the end.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Detects contracts that inherit from upgradeable patterns but might have storage issues
+      // Contract inherits Initializable/UUPSUpgradeable but has state variables after functions
+      /contract\s+\w+[^{]*(?:Initializable|UUPSUpgradeable|TransparentUpgradeable|Upgradeable)[^{]*\{(?:[\s\S]*?function[\s\S]*?)(?:uint|int|address|bool|bytes|string|mapping)\s+(?:public|private|internal)?\s+\w+\s*[;=]/gs,
+    ],
+    negativePatterns: [
+      /__gap/g, // Has storage gap (good practice)
+    ],
+    remediation:
+      "Use the storage gap pattern: uint256[50] private __gap; " +
+      "Only add new state variables at the end of the contract. " +
+      "Consider using OpenZeppelin's storage gap helpers or ERC-7201 namespaced storage.",
+    references: [
+      "https://docs.openzeppelin.com/upgrades-plugins/1.x/writing-upgradeable#storage-gaps",
+      "https://eips.ethereum.org/EIPS/eip-7201",
+    ],
+  },
+
+  // CUSTOM-002a: Insufficient Storage Gap Size
+  {
+    id: "CUSTOM-002a",
+    title: "Insufficient Storage Gap Size",
+    description:
+      "Storage gap is smaller than recommended. A gap of at least 50 slots is recommended " +
+      "to allow for future upgrades. Smaller gaps limit the number of state variables " +
+      "that can be added in future versions.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // Gap with size less than 50 (matches [1] through [49])
+      /uint256\s*\[\s*([1-9]|[1-4][0-9])\s*\]\s*(?:private|internal)?\s*__gap/g,
+    ],
+    remediation:
+      "Increase the storage gap to at least 50 slots: uint256[50] private __gap; " +
+      "When adding new state variables, reduce the gap size accordingly.",
+    references: [
+      "https://docs.openzeppelin.com/upgrades-plugins/1.x/writing-upgradeable#storage-gaps",
+    ],
+  },
+
+  // CUSTOM-002b: State Variables After Gap
+  {
+    id: "CUSTOM-002b",
+    title: "State Variables Declared After Storage Gap",
+    description:
+      "State variables declared after the __gap array will have unpredictable storage slots " +
+      "when the contract is upgraded. All state variables should be declared before the gap.",
+    severity: Severity.CRITICAL,
+    patterns: [
+      // Any state variable declaration after __gap
+      /__gap\s*;[\s\S]*?(?:uint|int|address|bool|bytes|string|mapping)\d*\s+(?:public|private|internal)?\s+(?!__gap)\w+\s*[;=]/gs,
+    ],
+    remediation:
+      "Move all state variables before the __gap declaration. " +
+      "The __gap should always be the last state variable in the contract.",
+    references: [
+      "https://docs.openzeppelin.com/upgrades-plugins/1.x/writing-upgradeable#storage-gaps",
+    ],
+  },
+
+  // CUSTOM-002c: Gap Not at End of Contract
+  {
+    id: "CUSTOM-002c",
+    title: "Storage Gap Not at End of State Variables",
+    description:
+      "The __gap array should be the last state variable before functions. " +
+      "Having state variables after the gap defeats its purpose and can cause storage collisions.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Gap followed by more state variables (not functions)
+      /__gap\s*;[^}]*?(?:(?:uint|int|address|bool|bytes|string|mapping)\d*\s+(?:public|private|internal)\s+\w+\s*[;=])/gs,
+    ],
+    negativePatterns: [
+      // Ignore if followed by function, modifier, event, or end of contract
+      /__gap\s*;\s*(?:function|modifier|event|constructor|\})/gs,
+    ],
+    remediation:
+      "Reorganize state variables so __gap is declared last, just before functions begin.",
+    references: [
+      "https://docs.openzeppelin.com/upgrades-plugins/1.x/writing-upgradeable#storage-gaps",
+    ],
+  },
+
+  // CUSTOM-002d: Initializable Without Disable Initializers
+  {
+    id: "CUSTOM-002d",
+    title: "Upgradeable Contract Missing _disableInitializers",
+    description:
+      "Implementation contracts should call _disableInitializers() in the constructor " +
+      "to prevent the implementation from being initialized directly, which could allow " +
+      "an attacker to take control of the implementation contract.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Contract with Initializable but constructor doesn't have _disableInitializers
+      /contract\s+\w+[^{]*Initializable[^{]*\{[\s\S]*?constructor\s*\([^)]*\)\s*\{[^}]*\}/gs,
+    ],
+    negativePatterns: [
+      /_disableInitializers\s*\(\s*\)/g,
+    ],
+    remediation:
+      "Add _disableInitializers() call in the constructor: " +
+      "constructor() { _disableInitializers(); }",
+    references: [
+      "https://docs.openzeppelin.com/upgrades-plugins/1.x/writing-upgradeable#initializing_the_implementation_contract",
+    ],
+  },
+
+  // CUSTOM-003: Reentrancy Risk - External Call Before State Update
+  {
+    id: "CUSTOM-003",
+    title: "Reentrancy Risk - External Call Before State Update",
+    description:
+      "Function makes an external call (via interface or low-level call) followed by state changes. " +
+      "This violates the Checks-Effects-Interactions pattern and may allow reentrancy attacks.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Interface call followed by state change (balanceOf, totalSupply, mappings)
+      /\w+\s*\([^)]*\)\s*\.\s*\w+\s*\([^)]*\)\s*;[\s\S]*?(?:balanceOf|totalSupply|allowance)\s*\[[^\]]+\]\s*(?:\+|-)?=/gs,
+      // State change followed by external call without reentrancy guard
+      /(?:balanceOf|totalSupply|allowance)\s*\[[^\]]+\]\s*(?:\+|-)=[\s\S]*?\w+\s*\([^)]*\)\s*\.\s*\w+\s*\([^)]*\)\s*;/gs,
+    ],
+    negativePatterns: [
+      /nonReentrant/g,
+      /ReentrancyGuard/g,
+      /_nonReentrant/g,
+    ],
+    remediation:
+      "Follow Checks-Effects-Interactions pattern: perform all state changes before external calls. " +
+      "Consider using OpenZeppelin's ReentrancyGuard.",
+    references: [
+      "https://swcregistry.io/docs/SWC-107",
+      "https://consensys.github.io/smart-contract-best-practices/attacks/reentrancy/",
+    ],
+  },
+
+  // CUSTOM-004: Stale/Manipulable Price Oracle
+  {
+    id: "CUSTOM-004",
+    title: "Stale or Manipulable Price Data",
+    description:
+      "Price data fetched earlier in a transaction and used later for critical calculations " +
+      "can be stale or manipulated via flash loans. Attackers can manipulate spot prices " +
+      "within a single transaction to exploit price-dependent logic.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Price variable used in arithmetic with debt/collateral calculations
+      /price\s*[\*\/][\s\S]*?(?:collateral|debt|liquidat|borrow|lend)/gis,
+      /(?:collateral|debt|liquidat|borrow|lend)[\s\S]*?price\s*[\*\/]/gis,
+      // getPrice/latestAnswer followed by state changes
+      /(?:getPrice|latestAnswer|latestRoundData)\s*\([^)]*\)[\s\S]*?(?:\w+\s*(?:\+|-|\*|\/)?=)/gs,
+      // Direct reserve/balance reads for pricing
+      /getReserves\s*\(\s*\)[\s\S]*?(?:price|value|amount)\s*=/gis,
+    ],
+    negativePatterns: [
+      /TWAP/gi,
+      /timeWeightedAverage/gi,
+      /updatedAt\s*[<>]/g,
+      /staleness/gi,
+      /require\s*\([^)]*timestamp/gi,
+    ],
+    remediation:
+      "Use time-weighted average prices (TWAP) instead of spot prices. " +
+      "Validate price freshness with staleness checks. " +
+      "Consider using Chainlink oracles with proper round validation.",
+    references: [
+      "https://blog.openzeppelin.com/secure-smart-contract-guidelines-the-dangers-of-price-oracles",
+      "https://samczsun.com/so-you-want-to-use-a-price-oracle/",
+    ],
+  },
+
+  // CUSTOM-005: Missing Zero Address Validation
+  {
+    id: "CUSTOM-005",
+    title: "Missing Zero Address Validation",
+    description:
+      "Functions that accept address parameters should validate that the address is not zero. " +
+      "Sending tokens or assigning permissions to the zero address can result in permanent loss of funds " +
+      "or broken access control.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // Function setting delegate/owner/admin without zero check
+      /function\s+(?:set|update|change)(?:Delegate|Owner|Admin|Operator|Manager|Controller)\s*\(\s*address\s+(\w+)\s*\)[^{]*\{(?:(?!require\s*\(\s*\1\s*!=\s*address\s*\(0\))(?!if\s*\(\s*\1\s*==\s*address\s*\(0\))[\s\S])*?\}/gs,
+      // Direct assignment to mappings with address key without validation
+      /function\s+\w+\s*\([^)]*address\s+(\w+)[^)]*\)[^{]*\{(?:(?!require\s*\(\s*\1\s*!=\s*address\s*\(0\))[\s\S])*?\w+\s*\[\s*(?:msg\.sender|\1)\s*\]\s*=\s*\1/gs,
+    ],
+    negativePatterns: [
+      /require\s*\([^)]*!=\s*address\s*\(\s*0\s*\)/g,
+      /if\s*\([^)]*==\s*address\s*\(\s*0\s*\)/g,
+      /revert\s+ZeroAddress/g,
+    ],
+    remediation:
+      "Add zero address validation: require(addr != address(0), \"Zero address\"); " +
+      "Or use custom errors: if (addr == address(0)) revert ZeroAddress();",
+    references: [
+      "https://consensys.github.io/smart-contract-best-practices/development-recommendations/solidity-specific/zero-address/",
+    ],
+  },
+
+  // CUSTOM-006: Missing Event for Critical State Change
+  {
+    id: "CUSTOM-006",
+    title: "Missing Event for Critical State Change",
+    description:
+      "Critical state changes (owner, admin, delegate, paused status, fees) should emit events " +
+      "for off-chain monitoring and transparency. Missing events make it difficult to track " +
+      "important changes and can hide malicious activity.",
+    severity: Severity.LOW,
+    patterns: [
+      // Setter functions without emit
+      /function\s+(?:set|update|change)(?:Owner|Admin|Delegate|Fee|Paused|Manager|Operator)\s*\([^)]*\)[^{]*\{(?:(?!emit\s+\w+)[\s\S])*?\}/gs,
+      // Direct assignment to critical variables without event
+      /(?:owner|admin|paused|feeRate|treasury)\s*=\s*[^;]+;(?:(?!emit)[\s\S])*?\}/gs,
+    ],
+    negativePatterns: [
+      /emit\s+\w+/g,
+    ],
+    remediation:
+      "Emit an event after critical state changes: " +
+      "emit DelegateChanged(msg.sender, oldDelegate, newDelegate);",
+    references: [
+      "https://consensys.github.io/smart-contract-best-practices/development-recommendations/solidity-specific/event-monitoring/",
+    ],
+  },
+
+  // CUSTOM-007: Price Calculation Before Validation
+  {
+    id: "CUSTOM-007",
+    title: "Price Calculation Before Validation",
+    description:
+      "Calculations using price data are performed before validating the result or collateralization. " +
+      "An attacker could manipulate the price to pass validation checks with favorable terms.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Calculation with price followed by require/if check
+      /\w+\s*=\s*[^;]*price[^;]*;[\s\S]*?(?:require|if)\s*\([^)]*(?:collateral|debt|min|max|threshold)/gis,
+      // Collateral check after calculation
+      /(?:minCollateral|maxBorrow|liquidation)\s*=[\s\S]*?price[\s\S]*?;[\s\S]*?require\s*\(/gis,
+    ],
+    remediation:
+      "Fetch fresh price data immediately before use. " +
+      "Add staleness checks for oracle data. " +
+      "Consider using Chainlink's latestRoundData with round validation.",
+    references: [
+      "https://docs.chain.link/data-feeds/price-feeds",
+    ],
+  },
+
+  // CUSTOM-008: Liquidation Threshold Without Slippage Protection
+  {
+    id: "CUSTOM-008",
+    title: "Liquidation Without Slippage Protection",
+    description:
+      "Liquidation calculations without slippage protection can be exploited. " +
+      "The price can change between transaction submission and execution, " +
+      "leading to unfavorable liquidations or failed transactions.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // Liquidation function without minOutput/slippage parameter
+      /function\s+liquidate\s*\([^)]*\)[^{]*\{(?:(?!minOutput|slippage|minAmount|deadline)[\s\S])*?\}/gs,
+      // Liquidation threshold check without bounds
+      /LIQUIDATION_THRESHOLD[\s\S]*?\/\s*\(?price/gis,
+    ],
+    negativePatterns: [
+      /minOutput/g,
+      /slippage/g,
+      /maxSlippage/g,
+      /deadline/g,
+    ],
+    remediation:
+      "Add slippage protection parameters (minOutput, deadline). " +
+      "Use price bounds or TWAP for liquidation calculations.",
+    references: [
+      "https://blog.chain.link/defi-security-best-practices/",
+    ],
+  },
+
+  // CUSTOM-009: Double Approval in Multisig
+  {
+    id: "CUSTOM-009",
+    title: "Double Approval Vulnerability in Multisig",
+    description:
+      "Approval count increments without checking if the signer has already approved. " +
+      "A single signer could approve multiple times to bypass the threshold requirement.",
+    severity: Severity.CRITICAL,
+    patterns: [
+      // Setting hasApproved and incrementing count without prior check
+      /hasApproved\s*\[[^\]]+\]\s*\[[^\]]+\]\s*=\s*true\s*;[\s\S]*?approvalCount\s*\[[^\]]+\]\s*\+\+/gs,
+      /approvalCount\s*\[[^\]]+\]\s*\+\+[\s\S]*?hasApproved\s*\[[^\]]+\]\s*\[[^\]]+\]\s*=\s*true/gs,
+    ],
+    negativePatterns: [
+      /require\s*\(\s*!?\s*hasApproved/g,
+      /if\s*\(\s*hasApproved/g,
+      /revert\s+AlreadyApproved/g,
+    ],
+    remediation:
+      "Check if the signer has already approved before incrementing: " +
+      "require(!hasApproved[id][msg.sender], \"Already approved\");",
+    references: [
+      "https://consensys.github.io/smart-contract-best-practices/development-recommendations/general/access-control/",
+    ],
+  },
+
+  // CUSTOM-010: Missing Execution Guard in Multisig
+  {
+    id: "CUSTOM-010",
+    title: "Missing Execution Guard - Can Execute Multiple Times",
+    description:
+      "Multisig or timelock operations can be executed multiple times because there's no check " +
+      "whether the operation was already executed. This can drain funds or cause unexpected state changes.",
+    severity: Severity.CRITICAL,
+    patterns: [
+      // Execute function with call but no executed check
+      /function\s+execute\w*\s*\([^)]*\)[^{]*\{(?:(?!executed\s*\[|isExecuted|wasExecuted)[\s\S])*?\.call\s*\{/gs,
+      // Withdrawal with approvalCount check but no execution flag
+      /require\s*\(\s*approvalCount[\s\S]*?\.call\s*\{value/gs,
+    ],
+    negativePatterns: [
+      /executed\s*\[/g,
+      /isExecuted/g,
+      /wasExecuted/g,
+      /require\s*\(\s*!executed/g,
+    ],
+    remediation:
+      "Track execution status and check before executing: " +
+      "require(!executed[id], \"Already executed\"); executed[id] = true;",
+    references: [
+      "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/governance/TimelockController.sol",
+    ],
+  },
+
+  // CUSTOM-011: Signature Without Replay Protection
+  {
+    id: "CUSTOM-011",
+    title: "Signature Without Replay Protection",
+    description:
+      "Signature-based functions without proper nonce tracking or domain separator " +
+      "are vulnerable to replay attacks. The same signature could be used multiple times " +
+      "or across different chains/contracts.",
+    severity: Severity.HIGH,
+    patterns: [
+      // ecrecover without nonce validation
+      /ecrecover\s*\([^)]*\)(?:(?!nonces\s*\[|usedNonces|require\s*\(\s*nonce)[\s\S])*?;/gs,
+      // Signature function without chainId in hash
+      /keccak256\s*\(\s*abi\.encodePacked\s*\([^)]*(?:msg\.sender|amount)[^)]*\)\s*\)(?:(?!block\.chainid|chainId)[\s\S])*?ecrecover/gs,
+    ],
+    negativePatterns: [
+      /nonces\s*\[\s*\w+\s*\]\s*\+\+/g,
+      /usedSignatures\s*\[/g,
+      /DOMAIN_SEPARATOR/g,
+      /EIP712/g,
+    ],
+    remediation:
+      "Use EIP-712 typed data signing with domain separator including chainId. " +
+      "Track used nonces: require(nonce == nonces[signer]++); " +
+      "Or track used signatures: require(!usedSignatures[sig]); usedSignatures[sig] = true;",
+    references: [
+      "https://eips.ethereum.org/EIPS/eip-712",
+      "https://swcregistry.io/docs/SWC-121",
+    ],
+  },
+
+  // CUSTOM-012: Signature Malleability Risk
+  {
+    id: "CUSTOM-012",
+    title: "ECDSA Signature Malleability",
+    description:
+      "Raw ecrecover usage without malleability checks. For every valid ECDSA signature, " +
+      "there exists another valid signature (with flipped s value). If signatures are used " +
+      "as unique identifiers, this can be exploited.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // Direct ecrecover without OpenZeppelin ECDSA
+      /ecrecover\s*\(\s*\w+\s*,\s*v\s*,\s*r\s*,\s*s\s*\)/g,
+      // Manual signature splitting without s validation
+      /assembly\s*\{[^}]*:=\s*mload[^}]*\}[\s\S]*?ecrecover/gs,
+    ],
+    negativePatterns: [
+      /ECDSA\.recover/g,
+      /SignatureChecker/g,
+      /require\s*\(\s*uint256\s*\(\s*s\s*\)\s*<=/g,
+      /s\s*>\s*0x7FFFFFFF/g,
+    ],
+    remediation:
+      "Use OpenZeppelin's ECDSA library which handles malleability: " +
+      "address signer = ECDSA.recover(hash, signature); " +
+      "Or manually check s value: require(uint256(s) <= 0x7FFFFFFFFFFFFFFF...);",
+    references: [
+      "https://swcregistry.io/docs/SWC-117",
+      "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/cryptography/ECDSA.sol",
+    ],
+  },
+
+  // CUSTOM-013: encodePacked with Multiple Dynamic Types
+  {
+    id: "CUSTOM-013",
+    title: "Hash Collision Risk with encodePacked",
+    description:
+      "Using abi.encodePacked with multiple dynamic types (string, bytes, arrays) " +
+      "can create hash collisions. Different inputs can produce the same hash.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // encodePacked with msg.sender and amount in signature context
+      /keccak256\s*\(\s*abi\.encodePacked\s*\(\s*msg\.sender\s*,\s*\w+\s*,/g,
+      // encodePacked in signature hash creation
+      /abi\.encodePacked\s*\([^)]*signature[^)]*\)/gi,
+    ],
+    negativePatterns: [
+      /abi\.encode\s*\(/g,
+    ],
+    remediation:
+      "Use abi.encode instead of abi.encodePacked for hashing: " +
+      "keccak256(abi.encode(param1, param2, param3));",
+    references: [
+      "https://swcregistry.io/docs/SWC-133",
+    ],
+  },
+
+  // CUSTOM-014: Flash Loan/Mint Without Proper Repayment
+  {
+    id: "CUSTOM-014",
+    title: "Flash Loan/Mint Without Proper Repayment Check",
+    description:
+      "Flash loan or flash mint implementation that doesn't properly verify repayment. " +
+      "Common issues: checking balance instead of actual repayment, not burning minted tokens, " +
+      "or allowing the borrower to manipulate the check.",
+    severity: Severity.CRITICAL,
+    patterns: [
+      // Flash mint that checks balance but doesn't burn
+      /function\s+flash(?:Mint|Loan)\s*\([^)]*\)[^{]*\{(?:(?!burn|_burn)[\s\S])*?balanceOf[\s\S]*?require/gs,
+      // totalSupply increase without corresponding decrease
+      /totalSupply\s*\+=[\s\S]*?\.on(?:Flash|Loan)[\s\S]*?(?!totalSupply\s*-=)/gs,
+    ],
+    negativePatterns: [
+      /burn\s*\(/g,
+      /_burn\s*\(/g,
+      /totalSupply\s*-=/g,
+    ],
+    remediation:
+      "Flash mints must burn the minted tokens after the callback. " +
+      "Flash loans must verify actual token return, not just balance. " +
+      "Consider implementing ERC-3156 standard for flash loans.",
+    references: [
+      "https://eips.ethereum.org/EIPS/eip-3156",
+      "https://www.euler.finance/blog/getting-the-most-out-of-euler-flash-loans",
+    ],
+  },
+
+  // CUSTOM-015: Precision Loss - Division Before Multiplication
+  {
+    id: "CUSTOM-015",
+    title: "Precision Loss - Division Before Multiplication",
+    description:
+      "Performing division before multiplication in integer arithmetic causes precision loss. " +
+      "In Solidity, integer division truncates, so dividing first loses precision that " +
+      "subsequent multiplication cannot recover.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // Division followed by multiplication on same line or adjacent
+      /\w+\s*\/\s*\d+\s*\*\s*\d+/g,
+      /\(\s*\w+\s*\/\s*\d+\s*\)\s*\*/g,
+      // Common pattern: amount / X * Y instead of amount * Y / X
+      /(?:debt|amount|balance|value)\s*\/\s*\d+\s*\*\s*\d+/gi,
+    ],
+    remediation:
+      "Always multiply before dividing: (amount * rate) / PRECISION instead of amount / PRECISION * rate. " +
+      "Use higher precision intermediate values when possible.",
+    references: [
+      "https://consensys.github.io/smart-contract-best-practices/development-recommendations/solidity-specific/integer-division/",
+    ],
+  },
+
+  // CUSTOM-016: Permit Without Deadline
+  {
+    id: "CUSTOM-016",
+    title: "Signature/Permit Without Deadline",
+    description:
+      "Permit or signature-based approval without a deadline parameter. " +
+      "Signatures remain valid forever, allowing them to be used at any future time, " +
+      "potentially when conditions have changed unfavorably for the signer.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // Permit/approve with signature but no deadline parameter
+      /function\s+permit\w*\s*\([^)]*(?:uint8\s+v|bytes\s+(?:memory\s+)?signature)[^)]*\)(?:(?!deadline|expiry|validUntil)[\s\S])*?\{/gs,
+      // ecrecover in function without deadline check
+      /function\s+\w+\s*\([^)]*\)[^{]*\{(?:(?!deadline|expiry|block\.timestamp\s*<)[\s\S])*?ecrecover/gs,
+    ],
+    negativePatterns: [
+      /require\s*\([^)]*deadline/g,
+      /require\s*\([^)]*expiry/g,
+      /require\s*\([^)]*block\.timestamp\s*</g,
+    ],
+    remediation:
+      "Add a deadline parameter and validate it: " +
+      "require(block.timestamp <= deadline, \"Signature expired\"); " +
+      "Consider implementing EIP-2612 for permit functionality.",
+    references: [
+      "https://eips.ethereum.org/EIPS/eip-2612",
+    ],
+  },
+
+  // CUSTOM-017: Missing Access Control on Critical Function
+  {
+    id: "CUSTOM-017",
+    title: "Missing Access Control on Critical Function",
+    description:
+      "Functions that modify critical protocol state (add tokens, set parameters, mint, pause) " +
+      "lack access control modifiers. Anyone can call these functions.",
+    severity: Severity.CRITICAL,
+    patterns: [
+      // Functions that sound critical but have no access control
+      /function\s+(?:add|remove|set|update|change|pause|unpause|mint|burn|upgrade)\w*\s*\([^)]*\)\s*(?:external|public)(?:(?!onlyOwner|onlyAdmin|onlyRole|require\s*\(\s*msg\.sender)[\s\S])*?\{/gs,
+    ],
+    negativePatterns: [
+      /onlyOwner/g,
+      /onlyAdmin/g,
+      /onlyRole/g,
+      /require\s*\(\s*msg\.sender\s*==/g,
+      /require\s*\(\s*hasRole/g,
+      /_checkOwner/g,
+    ],
+    remediation:
+      "Add access control: require(msg.sender == owner) or use OpenZeppelin's Ownable/AccessControl.",
+    references: [
+      "https://docs.openzeppelin.com/contracts/access-control",
+    ],
+  },
 ];
 
 // ============================================================================
