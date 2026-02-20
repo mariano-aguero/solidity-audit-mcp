@@ -582,11 +582,15 @@ export class AderynAdapter extends BaseAnalyzer<AderynOptions> {
     logger.info(`[AderynAdapter] Analyzing ${input.contractPath}`);
 
     try {
-      const findings = await runAderyn(input.contractPath, input.projectRoot ?? input.contractPath, {
-        scope: options.scope,
-        exclude: options.exclude,
-        timeout: options.timeout,
-      });
+      const findings = await runAderyn(
+        input.contractPath,
+        input.projectRoot ?? input.contractPath,
+        {
+          scope: options.scope,
+          exclude: options.exclude,
+          timeout: options.timeout,
+        }
+      );
 
       const filteredFindings = options.includeInformational
         ? findings

@@ -608,12 +608,16 @@ export class SlitherAdapter extends BaseAnalyzer<SlitherOptions> {
     logger.info(`[SlitherAdapter] Analyzing ${input.contractPath}`);
 
     try {
-      const findings = await runSlither(input.contractPath, input.projectRoot ?? input.contractPath, {
-        filterPaths: options.filterPaths,
-        detectors: options.detectors,
-        excludeDetectors: options.excludeDetectors,
-        timeout: options.timeout,
-      });
+      const findings = await runSlither(
+        input.contractPath,
+        input.projectRoot ?? input.contractPath,
+        {
+          filterPaths: options.filterPaths,
+          detectors: options.detectors,
+          excludeDetectors: options.excludeDetectors,
+          timeout: options.timeout,
+        }
+      );
 
       const filteredFindings = options.includeInformational
         ? findings

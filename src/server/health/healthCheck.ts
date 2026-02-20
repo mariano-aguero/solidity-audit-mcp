@@ -122,7 +122,8 @@ async function getHealthStatus(): Promise<HealthStatus> {
     checkAnalyzer(
       "forge",
       ["--version"],
-      (out) => out.match(/Version:\s*([\d.]+(?:-\w+)?)/i)?.[1] ?? out.split("\n")[0]?.trim() ?? out.trim()
+      (out) =>
+        out.match(/Version:\s*([\d.]+(?:-\w+)?)/i)?.[1] ?? out.split("\n")[0]?.trim() ?? out.trim()
     ),
     checkAnalyzer(
       "solc",

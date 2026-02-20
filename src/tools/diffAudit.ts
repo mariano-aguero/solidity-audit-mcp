@@ -236,7 +236,6 @@ function createErrorResult(error: string): DiffAuditResult {
   };
 }
 
-
 interface CompareResult {
   added: Finding[];
   resolved: Finding[];
