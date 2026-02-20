@@ -80,7 +80,7 @@ The main analysis in `src/tools/analyzeContract.ts`:
 4. Sorts by severity and formats output
 
 ### Analyzer Architecture (`src/analyzers/`)
-Uses Adapter pattern for unified analyzer interface:
+Uses Adapter pattern for unified analyzer interface. Each adapter is **self-contained** — it owns its full implementation (runner, parser, deduplication) and re-exports all public symbols.
 
 ```
 src/analyzers/
@@ -89,21 +89,27 @@ src/analyzers/
 ├── AnalyzerOrchestrator.ts # Parallel execution coordinator
 ├── types.ts              # Analyzer type definitions
 └── adapters/
-    ├── SlitherAdapter.ts
-    ├── AderynAdapter.ts
-    ├── SlangAdapter.ts
-    └── GasAdapter.ts
+    ├── SlitherAdapter.ts  # Slither runner + SLITHER_DETECTOR_MAP + getSlitherDetectors
+    ├── AderynAdapter.ts   # Aderyn runner + deduplicateFindings
+    ├── SlangAdapter.ts    # @nomicfoundation/slang AST parsing + parseContractInfo + detectPatterns + analyzeWithSlang
+    ├── GasAdapter.ts      # Gas pattern analysis + GAS_PATTERNS + analyzeGasPatterns
+    ├── EchidnaAdapter.ts  # Property fuzzer (opt-in, requires echidna_* functions)
+    └── HalmosAdapter.ts   # Symbolic execution (opt-in, requires check_* functions)
 ```
 
-### MCP Tools (8 total)
+> **Important:** The legacy files `slither.ts`, `aderyn.ts`, `slangAnalyzer.ts`, and `gasOptimizer.ts` were merged into their respective adapters and deleted. Do not recreate them.
+
+### MCP Tools (10 total)
 - `analyze_contract` - Full security analysis pipeline
 - `get_contract_info` - Contract metadata and attack surface
-- `check_vulnerabilities` - SWC Registry pattern scanning
+- `check_vulnerabilities` - SWC Registry pattern scanning (86 detectors)
 - `run_tests` - Forge test execution with coverage
 - `generate_report` - Format findings into audit reports
 - `optimize_gas` - Gas optimization analysis
 - `diff_audit` - Compare two contract versions
 - `audit_project` - Scan entire project directory
+- `generate_invariants` - Generate Foundry invariant test templates (auto-detects protocol type)
+- `explain_finding` - Detailed KB explanation for 19 finding IDs + keyword search
 
 ### Templates (`src/templates/`)
 Markdown templates for reports and PR comments:
@@ -152,10 +158,11 @@ __tests__/
 
 ## Adding New Detectors
 
-- **Slang AST detectors**: `src/analyzers/slangAnalyzer.ts` - add to `SECURITY_DETECTORS` and `QUERY_STRINGS`
-- **SWC patterns**: `src/tools/checkVulnerabilities.ts` - add to `SWC_PATTERNS` array
-- **Slither mappings**: `src/analyzers/slither.ts` - add to `SLITHER_DETECTOR_MAP`
-- **Pattern detection**: `src/analyzers/slangAnalyzer.ts:detectPatterns()` - add regex patterns
+- **Slang AST detectors**: `src/analyzers/adapters/SlangAdapter.ts` — add to `SECURITY_DETECTORS` and `QUERY_STRINGS`
+- **SWC patterns**: `src/tools/checkVulnerabilities.ts` — add to `SWC_PATTERNS` array
+- **Slither mappings**: `src/analyzers/adapters/SlitherAdapter.ts` — add to `SLITHER_DETECTOR_MAP`
+- **Pattern detection**: `src/analyzers/adapters/SlangAdapter.ts:detectPatterns()` — add to `patternDefs`
+- **explainFinding KB**: `src/tools/explainFinding.ts` — add `FindingExplanation` to `FINDING_DATABASE`, update `keywordMap` and `formatNotFound`
 
 ## Docker
 
