@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
+    libgmp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Python virtual environment
@@ -41,10 +42,11 @@ ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-# Install Slither and solc-select
+# Install Slither, solc-select, and Halmos (symbolic execution)
 RUN pip3 install --no-cache-dir \
     slither-analyzer \
-    solc-select
+    solc-select \
+    halmos
 
 # Install common Solidity versions (solc-select handles architecture)
 # Note: On ARM64, some older versions may not be available
@@ -62,6 +64,22 @@ RUN ARCH=$(dpkg --print-architecture) \
 RUN curl -L https://foundry.paradigm.xyz | bash \
     && /root/.foundry/bin/foundryup
 ENV PATH="/root/.foundry/bin:$PATH"
+
+# Install Echidna property fuzzer (x86_64 only — no ARM64 pre-built binary)
+RUN ARCH=$(dpkg --print-architecture) \
+    && if [ "$ARCH" = "amd64" ]; then \
+         ECHIDNA_VERSION=$(curl -s https://api.github.com/repos/crytic/echidna/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') \
+         && echo "Installing Echidna $ECHIDNA_VERSION" \
+         && ECHIDNA_VER_CLEAN="${ECHIDNA_VERSION#v}" \
+         && curl -L "https://github.com/crytic/echidna/releases/download/${ECHIDNA_VERSION}/echidna-${ECHIDNA_VER_CLEAN}-x86_64-linux.tar.gz" -o /tmp/echidna.tar.gz \
+         && mkdir -p /tmp/echidna-extract \
+         && tar -xzf /tmp/echidna.tar.gz -C /tmp/echidna-extract \
+         && find /tmp/echidna-extract -name echidna -type f -exec mv {} /usr/local/bin/echidna \; \
+         && chmod +x /usr/local/bin/echidna \
+         && rm -rf /tmp/echidna.tar.gz /tmp/echidna-extract; \
+       else \
+         echo "ARM64: Echidna pre-built binary not available for this architecture"; \
+       fi
 
 # Install Aderyn from pre-built binary (supports both ARM64 and x86_64)
 # Download latest release from GitHub based on architecture

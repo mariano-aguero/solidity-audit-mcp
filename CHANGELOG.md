@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] - 2026-02-20
+
+### Added
+- **Echidna in Docker** — both `Dockerfile.dev` and `Dockerfile.saas` now install the Echidna property fuzzer binary at build time (x86_64 only; ARM64 skipped gracefully since no official pre-built binary exists)
+- **Halmos in Docker** — both Dockerfiles now install Halmos via `pip install halmos` alongside Slither (works on x86_64 and ARM64)
+- **`libgmp-dev` system dependency** — added to both Dockerfiles; required by the Echidna binary (Haskell runtime)
+
+### Changed
+- Bumped version from `1.3.0` to `1.4.0`
+
+---
+
 ## [1.3.0] - 2026-02-20
 
 ### Added
