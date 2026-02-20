@@ -8,7 +8,7 @@
 
 import { readFile, access } from "fs/promises";
 import { z } from "zod";
-import { parseContractInfoFromSource } from "../analyzers/slangAnalyzer.js";
+import { parseContractInfoFromSource } from "../analyzers/adapters/SlangAdapter.js";
 import { logger } from "../utils/logger.js";
 
 // ============================================================================

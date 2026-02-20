@@ -226,7 +226,7 @@ export async function handleApiCiReview(req: IncomingMessage): Promise<JsonRespo
 
         // Run Slang analysis
         try {
-          const { analyzeWithSlang } = await import("../../analyzers/slangAnalyzer.js");
+          const { analyzeWithSlang } = await import("../../analyzers/adapters/SlangAdapter.js");
           const slangResult = await analyzeWithSlang(source, contractPath, {
             includeInformational: false,
           });

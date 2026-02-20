@@ -11,7 +11,7 @@ import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { readFile } from "fs/promises";
 import { Severity, type Finding } from "../../src/types/index.js";
-import { parseContractInfo, detectPatterns } from "../../src/analyzers/slangAnalyzer.js";
+import { parseContractInfo, detectPatterns } from "../../src/analyzers/adapters/SlangAdapter.js";
 import { deduplicateFindings } from "../../src/analyzers/adapters/AderynAdapter.js";
 
 // ESM equivalent of __dirname

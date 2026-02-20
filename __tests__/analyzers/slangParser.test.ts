@@ -11,7 +11,7 @@ import {
   parseContractInfo,
   detectPatterns,
   summarizePatterns,
-} from "../../src/analyzers/slangAnalyzer.js";
+} from "../../src/analyzers/adapters/SlangAdapter.js";
 
 // ESM equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);

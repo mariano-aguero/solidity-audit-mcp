@@ -11,7 +11,7 @@ import {
   parseContractInfo,
   detectPatterns,
   type ParsedContract,
-} from "../analyzers/slangAnalyzer.js";
+} from "../analyzers/adapters/SlangAdapter.js";
 import type { FunctionInfo, Visibility } from "../types/index.js";
 import { logger } from "../utils/logger.js";
 

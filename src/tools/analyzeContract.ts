@@ -18,7 +18,7 @@ import {
 import { createOrchestrator } from "../analyzers/AnalyzerOrchestrator.js";
 import { getAnalyzerRegistry } from "../analyzers/AnalyzerRegistry.js";
 import type { AnalyzerId, AnalyzerResult } from "../analyzers/types.js";
-import { parseContractInfo, detectPatterns } from "../analyzers/slangAnalyzer.js";
+import { parseContractInfo, detectPatterns } from "../analyzers/adapters/SlangAdapter.js";
 import {
   loadCustomDetectors,
   runCustomDetectors,
