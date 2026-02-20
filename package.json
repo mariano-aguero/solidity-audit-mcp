@@ -56,7 +56,7 @@
     "docker:shell": "docker run -it --entrypoint bash -v $(pwd):/contracts solidity-audit-mcp",
     "server": "node dist/server.js",
     "server:dev": "tsx src/server.ts",
-    "saas:build": "docker build -f Dockerfile.saas -t solidity-audit-saas .",
+    "saas:build": "docker build -f docker/Dockerfile.saas -t solidity-audit-saas .",
     "saas:up": "docker-compose -f docker/docker-compose.saas.yml up -d",
     "saas:down": "docker-compose -f docker/docker-compose.saas.yml down",
     "saas:logs": "docker-compose -f docker/docker-compose.saas.yml logs -f"
@@ -64,8 +64,6 @@
   "files": [
     "dist",
     "README.md",
-    "Dockerfile.saas",
-    "Dockerfile.dev",
     "docker/"
   ],
   "keywords": [

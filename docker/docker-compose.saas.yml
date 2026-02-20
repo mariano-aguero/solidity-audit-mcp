@@ -16,7 +16,7 @@ services:
   solidity-audit-saas:
     build:
       context: ..
-      dockerfile: Dockerfile.saas
+      dockerfile: docker/Dockerfile.saas
     container_name: solidity-audit-saas
     ports:
       - "${PORT:-3000}:3000"
