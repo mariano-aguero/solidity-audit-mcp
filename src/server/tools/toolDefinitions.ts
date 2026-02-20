@@ -36,7 +36,10 @@ export const TOOLS: Tool[] = [
         },
         analyzers: {
           type: "array",
-          items: { type: "string", enum: ["slither", "aderyn", "slang", "gas"] },
+          items: {
+            type: "string",
+            enum: ["slither", "aderyn", "slang", "gas", "echidna", "halmos"],
+          },
           description: "Specific analyzers to run (runs all if omitted)",
         },
       },
@@ -218,6 +221,62 @@ export const TOOLS: Tool[] = [
         },
       },
       required: ["projectRoot"],
+    },
+  },
+  {
+    name: "generate_invariants",
+    description:
+      "Analyzes a Solidity contract and generates Foundry invariant test suggestions " +
+      "based on detected protocol type (ERC-20, ERC-4626 vault, lending, AMM, governance, staking). " +
+      "Returns ready-to-use invariant_*() function templates with severity classification.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        contractPath: {
+          type: "string",
+          description: "Path to the Solidity contract file",
+        },
+        protocolType: {
+          type: "string",
+          enum: ["auto", "erc20", "erc721", "vault", "lending", "amm", "governance", "staking"],
+          description: "Protocol type for targeted invariants (auto-detected if omitted)",
+          default: "auto",
+        },
+        includeStateful: {
+          type: "boolean",
+          description: "Include stateful invariant suggestions with Foundry run commands",
+          default: true,
+        },
+      },
+      required: ["contractPath"],
+    },
+  },
+  {
+    name: "explain_finding",
+    description:
+      "Returns a detailed explanation of a security finding: root cause, impact, step-by-step " +
+      "exploit scenario, vulnerable vs. secure code, Foundry PoC template, and remediation steps. " +
+      "Accepts SWC IDs (e.g. 'SWC-107'), custom detector IDs (e.g. 'CUSTOM-018'), " +
+      "or free-text keywords (e.g. 'reentrancy', 'flash loan', 'paymaster').",
+    inputSchema: {
+      type: "object",
+      properties: {
+        findingId: {
+          type: "string",
+          description:
+            "Finding ID or keyword: SWC-107, CUSTOM-018, 'reentrancy', 'flash loan', 'paymaster', etc.",
+        },
+        severity: {
+          type: "string",
+          enum: ["critical", "high", "medium", "low", "informational"],
+          description: "Severity level for additional context (optional)",
+        },
+        contractContext: {
+          type: "string",
+          description: "Brief description of the contract to tailor the explanation",
+        },
+      },
+      required: ["findingId"],
     },
   },
 ];

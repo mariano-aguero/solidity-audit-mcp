@@ -17,6 +17,8 @@ export type {
   SlangOptions,
   GasOptions,
   CustomDetectorOptions,
+  EchidnaOptions,
+  HalmosOptions,
   AnalyzerOptions,
   AnalyzerMetadata,
   AnalyzerResult,

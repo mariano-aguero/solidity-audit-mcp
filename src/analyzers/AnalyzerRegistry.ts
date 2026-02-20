@@ -21,6 +21,8 @@ import { SlitherAdapter } from "./adapters/SlitherAdapter.js";
 import { AderynAdapter } from "./adapters/AderynAdapter.js";
 import { SlangAdapter } from "./adapters/SlangAdapter.js";
 import { GasAdapter } from "./adapters/GasAdapter.js";
+import { EchidnaAdapter } from "./adapters/EchidnaAdapter.js";
+import { HalmosAdapter } from "./adapters/HalmosAdapter.js";
 import { logger } from "../utils/logger.js";
 
 // ============================================================================
@@ -108,6 +110,26 @@ export class AnalyzerRegistry {
       description: gas.description,
       capabilities: gas.capabilities,
       defaultOptions: gas.getDefaultOptions(),
+    });
+
+    // Echidna - Haskell-based property fuzzer (Trail of Bits)
+    const echidna = new EchidnaAdapter();
+    this.register(echidna, {
+      id: echidna.id,
+      name: echidna.name,
+      description: echidna.description,
+      capabilities: echidna.capabilities,
+      defaultOptions: echidna.getDefaultOptions(),
+    });
+
+    // Halmos - Symbolic execution engine (a16z)
+    const halmos = new HalmosAdapter();
+    this.register(halmos, {
+      id: halmos.id,
+      name: halmos.name,
+      description: halmos.description,
+      capabilities: halmos.capabilities,
+      defaultOptions: halmos.getDefaultOptions(),
     });
 
     logger.info(`[AnalyzerRegistry] Registered ${this.analyzers.size} built-in analyzers`);

@@ -17,6 +17,8 @@ import { generateReport } from "../../tools/generateReport.js";
 import { optimizeGas, formatGasOptimizationResult } from "../../tools/optimizeGas.js";
 import { diffAudit } from "../../tools/diffAudit.js";
 import { auditProject } from "../../tools/auditProject.js";
+import { generateInvariants } from "../../tools/generateInvariants.js";
+import { explainFinding } from "../../tools/explainFinding.js";
 
 // Schema imports
 import {
@@ -29,6 +31,8 @@ import {
   DiffAuditInputSchema,
   AuditProjectInputSchema,
 } from "../schemas/index.js";
+import { GenerateInvariantsInputSchema } from "../../tools/generateInvariants.js";
+import { ExplainFindingInputSchema } from "../../tools/explainFinding.js";
 
 // Tool definitions
 import { TOOLS } from "../tools/toolDefinitions.js";
@@ -51,7 +55,9 @@ export type ToolName =
   | "generate_report"
   | "optimize_gas"
   | "diff_audit"
-  | "audit_project";
+  | "audit_project"
+  | "generate_invariants"
+  | "explain_finding";
 
 // ============================================================================
 // Individual Tool Handlers
@@ -110,6 +116,18 @@ async function handleAuditProject(args: unknown): Promise<string> {
   return await auditProject(input);
 }
 
+async function handleGenerateInvariants(args: unknown): Promise<string> {
+  const input = GenerateInvariantsInputSchema.parse(args);
+  logger.info(`generate_invariants called`, { contractPath: input.contractPath });
+  return await generateInvariants(input);
+}
+
+async function handleExplainFinding(args: unknown): Promise<string> {
+  const input = ExplainFindingInputSchema.parse(args);
+  logger.info(`explain_finding called`, { findingId: input.findingId });
+  return await explainFinding(input);
+}
+
 // ============================================================================
 // Tool Handler Registry
 // ============================================================================
@@ -123,6 +141,8 @@ const TOOL_HANDLERS: Record<ToolName, (args: unknown) => Promise<string>> = {
   optimize_gas: handleOptimizeGas,
   diff_audit: handleDiffAudit,
   audit_project: handleAuditProject,
+  generate_invariants: handleGenerateInvariants,
+  explain_finding: handleExplainFinding,
 };
 
 // ============================================================================

@@ -17,6 +17,8 @@ export type DetectorSource =
   | "aderyn"
   | "manual"
   | "gas-optimizer"
+  | "echidna"
+  | "halmos"
   | `custom:${string}`
   | `slang:${string}`;
 

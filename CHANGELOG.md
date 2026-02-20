@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-02-19
+
+### Added
+- **13 new security detectors** (`CUSTOM-022` through `CUSTOM-034`):
+  - **Uniswap V4 hooks** (`CUSTOM-022` to `CUSTOM-025`) — token drain via delta manipulation, `unlock()` reentrancy, permission misconfiguration, pool initialization front-running
+  - **Restaking / LRT** (`CUSTOM-026` to `CUSTOM-028`) — slashing propagation without accounting, withdrawal queue race conditions, operator concentration risk
+  - **Points & Airdrop** (`CUSTOM-029` to `CUSTOM-031`) — Merkle double-claim, vesting bypass via transfer, Sybil-vulnerable accumulation
+  - **ERC-4337 Account Abstraction** (`CUSTOM-032` to `CUSTOM-034`) — paymaster drain, session key scope bypass, bundler griefing via gas manipulation
+- **`generate_invariants` MCP tool** — auto-detects protocol type (ERC-20, ERC-4626, lending, AMM, governance, staking) and generates ready-to-use Foundry `invariant_*()` test templates with severity classification
+- **`explain_finding` MCP tool** — knowledge base with root cause, impact, exploit scenario, vulnerable/secure code comparison, Foundry PoC template, and remediation for SWC and custom finding IDs; supports free-text keyword search (e.g. "reentrancy", "flash loan", "paymaster")
+- **`EchidnaAdapter`** — Echidna property fuzzer integration (Trail of Bits); auto-writes YAML config, parses JSON/text output, returns `Finding[]` for violated `echidna_` prefixed properties
+- **`HalmosAdapter`** — Halmos symbolic execution engine integration (a16z); runs `check_*` functions, extracts counterexamples, returns `Finding[]` for violated symbolic properties
+- **`"echidna"` and `"halmos"` analyzer IDs** — registered in `AnalyzerRegistry`, selectable via `analyze_contract`'s `analyzers` parameter
+
+### Changed
+- Extended `DetectorSource` type to include `"echidna"` and `"halmos"` values
+- Extended `AnalyzerId` union to include `"echidna"` and `"halmos"`
+- `analyze_contract` tool `analyzers` enum now includes `"echidna"` and `"halmos"` options
+- Bumped version from `1.1.0` to `1.2.0`
+
+---
+
 ## [1.1.0] - 2026-02-19
 
 ### Added

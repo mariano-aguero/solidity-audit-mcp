@@ -1379,6 +1379,395 @@ const SWC_PATTERNS: SWCPattern[] = [
       "https://soliditylang.org/blog/2024/01/26/transient-storage/",
     ],
   },
+
+  // =========================================================================
+  // UNISWAP V4 HOOKS
+  // =========================================================================
+
+  // CUSTOM-022: V4 Hook Token Drain via beforeSwap/afterSwap
+  {
+    id: "CUSTOM-022",
+    title: "Uniswap V4 Hook Token Drain via Delta Manipulation",
+    description:
+      "Uniswap V4 hooks can manipulate token deltas in beforeSwap/afterSwap callbacks. " +
+      "A malicious or misconfigured hook can call PoolManager.take() to drain tokens " +
+      "from the pool beyond the legitimate swap amount. " +
+      "If the hook does not validate that the delta it takes matches the expected swap output, " +
+      "liquidity providers' funds can be extracted.",
+    severity: Severity.CRITICAL,
+    patterns: [
+      // take() called inside a hook callback without validation
+      /function\s+(?:before|after)Swap[^{]*\{[^}]*\.take\s*\([^)]*\)/gs,
+      // settle() + take() pattern without checking deltas
+      /\.take\s*\([^)]*\)[^;]*;[^}]*\.settle\s*\(/gs,
+    ],
+    negativePatterns: [
+      /delta\.amount0\s*\(\s*\)/g,
+      /delta\.amount1\s*\(\s*\)/g,
+      /require\s*\([^)]*delta/gi,
+    ],
+    remediation:
+      "Always validate the BalanceDelta returned by the PoolManager before calling take(). " +
+      "Ensure the amount taken equals the expected swap delta: " +
+      "require(delta.amount0() == expectedDelta, 'Invalid delta'); " +
+      "Use beforeSwapReturnDelta / afterSwapReturnDelta flags correctly and never take more than the swap output.",
+    references: [
+      "https://docs.uniswap.org/contracts/v4/concepts/hooks",
+      "https://github.com/Uniswap/v4-core/blob/main/src/interfaces/IPoolManager.sol",
+    ],
+  },
+
+  // CUSTOM-023: V4 Hook Reentrancy via unlock()
+  {
+    id: "CUSTOM-023",
+    title: "Uniswap V4 Hook Reentrancy via unlock() Callback",
+    description:
+      "Uniswap V4's PoolManager uses an unlock() mechanism where the caller provides " +
+      "a callback that executes inside the unlock context. If a hook or contract calls " +
+      "PoolManager.unlock() from within a hook callback (or from a function that is itself " +
+      "called by a hook), reentrancy can occur. The V4 locker pattern does not prevent " +
+      "nested unlock() calls in all scenarios.",
+    severity: Severity.HIGH,
+    patterns: [
+      // unlock() called inside hook callbacks
+      /function\s+(?:before|after)(?:Swap|AddLiquidity|RemoveLiquidity|Initialize)[^{]*\{[^}]*\.unlock\s*\(/gs,
+      // IPoolManager.unlock in a hook contract
+      /(?:IPoolManager|poolManager)\s*\.\s*unlock\s*\(/g,
+    ],
+    negativePatterns: [/nonReentrant/g, /ReentrancyGuard/g],
+    remediation:
+      "Avoid calling PoolManager.unlock() from within hook callbacks. " +
+      "Design hook logic to complete within a single unlock context. " +
+      "If re-entry into the pool is needed, structure operations as a single atomic callback " +
+      "rather than nested unlock() calls.",
+    references: ["https://docs.uniswap.org/contracts/v4/concepts/hooks#hook-callbacks"],
+  },
+
+  // CUSTOM-024: V4 Hook Permission Misconfiguration
+  {
+    id: "CUSTOM-024",
+    title: "Uniswap V4 Hook Permission Misconfiguration",
+    description:
+      "Uniswap V4 hooks declare permissions via the Hooks.Permissions struct returned by " +
+      "getHookPermissions(). If a hook declares it does NOT need a callback (e.g., beforeSwap=false) " +
+      "but still implements the function, or vice versa — declares a permission but does not " +
+      "implement the guard — behavior is undefined. " +
+      "Over-permissioned hooks increase the attack surface unnecessarily.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // Hook contract implementing callbacks not declared in permissions
+      /function\s+(?:before|after)(?:Swap|AddLiquidity|RemoveLiquidity|Initialize|Donate)\s*\([^)]*\)/g,
+    ],
+    negativePatterns: [/getHookPermissions\s*\(\s*\)/g, /Hooks\.Permissions/g],
+    remediation:
+      "Implement getHookPermissions() accurately — only declare permissions for callbacks " +
+      "your hook actually uses. Review the Hooks.validateHookPermissions() function to ensure " +
+      "your hook address bits match the declared permissions.",
+    references: [
+      "https://github.com/Uniswap/v4-core/blob/main/src/libraries/Hooks.sol",
+      "https://docs.uniswap.org/contracts/v4/concepts/hook-flags",
+    ],
+  },
+
+  // CUSTOM-025: V4 Pool Initialization Front-Running
+  {
+    id: "CUSTOM-025",
+    title: "Uniswap V4 Pool Initialization Front-Running",
+    description:
+      "When a new V4 pool is initialized, the initial sqrtPriceX96 determines the starting price. " +
+      "If hook logic runs onInitialize and trusts this price for any state mutation " +
+      "(e.g., setting oracle prices, minting initial positions), an attacker can front-run " +
+      "the initialization with a different price to manipulate initial state.",
+    severity: Severity.HIGH,
+    patterns: [
+      // afterInitialize hook that uses sqrtPriceX96 for state writes
+      /function\s+afterInitialize\s*\([^)]*sqrtPriceX96[^)]*\)[^{]*\{[^}]*(?:price|oracle|twap|mint)\s*=/gis,
+      // beforeInitialize writing state based on pool key
+      /function\s+beforeInitialize\s*\([^)]*\)[^{]*\{[^}]*=\s*[^;]+;/gs,
+    ],
+    negativePatterns: [/onlyPoolManager/g, /require\s*\(\s*msg\.sender\s*==.*poolManager/gi],
+    remediation:
+      "Never trust the initial sqrtPriceX96 from pool initialization for critical state. " +
+      "Add access control to hook callbacks so only the PoolManager can call them. " +
+      "If price initialization is required, use a TWAP or delay-based mechanism.",
+    references: ["https://docs.uniswap.org/contracts/v4/concepts/pools#initialization"],
+  },
+
+  // =========================================================================
+  // RESTAKING / LRT (EigenLayer style)
+  // =========================================================================
+
+  // CUSTOM-026: Slashing Propagation Without Proper Accounting
+  {
+    id: "CUSTOM-026",
+    title: "Restaking Slashing Propagation Without Accounting",
+    description:
+      "In restaking protocols (EigenLayer style), operators can be slashed by AVSs. " +
+      "If the LRT/restaking contract does not properly propagate slashing events to " +
+      "the share price or underlying accounting, stakers may withdraw more than they " +
+      "are entitled to after a slash event, leading to insolvency.",
+    severity: Severity.CRITICAL,
+    patterns: [
+      // withdraw/redeem without checking if slashing has occurred
+      /function\s+(?:withdraw|redeem|unstake)\s*\([^)]*\)[^{]*\{(?:(?!slash|penalty|loss|haircut)[\s\S])*?transfer/gis,
+      // shares calculation without accounting for slashing
+      /shares\s*=\s*(?:amount|assets)\s*\*\s*totalShares\s*\/\s*totalAssets(?:(?!slash|penalt)[\s\S])*?;/gis,
+    ],
+    negativePatterns: [/slashingFactor/g, /penaltyMultiplier/g, /haircut/gi, /lossAccumulator/gi],
+    remediation:
+      "Implement a slashing factor that reduces share value upon slash events. " +
+      "Add a pendingSlash state that must be processed before withdrawals. " +
+      "Consider implementing ERC-4626 with a slashing-aware totalAssets() that accounts for pending losses.",
+    references: [
+      "https://docs.eigenlayer.xyz/eigenlayer/avs-guides/slashing",
+      "https://eips.ethereum.org/EIPS/eip-4626",
+    ],
+  },
+
+  // CUSTOM-027: LRT Withdrawal Queue Race Condition
+  {
+    id: "CUSTOM-027",
+    title: "LRT Withdrawal Queue Race Condition",
+    description:
+      "Liquid Restaking Tokens (LRT) that implement withdrawal queues may be vulnerable " +
+      "to race conditions. If multiple users request withdrawals simultaneously and " +
+      "the queue does not properly serialize or snapshot state at request time, " +
+      "users may receive different amounts than expected due to price changes or " +
+      "slashing events between request and fulfillment.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Withdrawal request without snapshotting the exchange rate
+      /function\s+requestWithdraw\w*\s*\([^)]*\)[^{]*\{(?:(?!exchangeRate|pricePerShare|sharePrice|snapshot)[\s\S])*?withdrawalQueue/gis,
+      // Queue processing without rate lock
+      /function\s+processWithdraw\w*\s*\([^)]*\)[^{]*\{(?:(?!lockPrice|snapshotRate|priceAt)[\s\S])*?transfer/gis,
+    ],
+    negativePatterns: [/snapshotRate/g, /requestPrice/g, /priceAtRequest/g],
+    remediation:
+      "Snapshot the exchange rate at the time of withdrawal request, not fulfillment. " +
+      "Store the locked rate per withdrawal request: " +
+      "withdrawals[id].rate = currentRate(); " +
+      "Process fulfillments using the stored rate, not the current one.",
+    references: ["https://docs.eigenlayer.xyz/eigenlayer/restaking-guides/restaking-user-guide"],
+  },
+
+  // CUSTOM-028: Operator Concentration Risk
+  {
+    id: "CUSTOM-028",
+    title: "Restaking Operator Concentration Risk",
+    description:
+      "Restaking protocols that allow arbitrary stake concentration in a single operator " +
+      "create systemic risk. If one operator controls a large portion of delegated stake " +
+      "and gets slashed (or acts maliciously), the impact propagates to all delegators. " +
+      "Missing maximum stake per operator limits amplify this risk.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // Delegation without checking operator limits
+      /function\s+delegate\w*\s*\([^)]*address\s+operator[^)]*\)[^{]*\{(?:(?!maxStake|operatorCap|maxDelegation|limit)[\s\S])*?operatorShares/gis,
+      // stake/deposit to operator without cap check
+      /function\s+(?:stake|deposit)\w*\s*\([^)]*\)[^{]*\{(?:(?!maxOperator|cap|limit)[\s\S])*?operator\[/gis,
+    ],
+    negativePatterns: [
+      /maxOperatorStake/g,
+      /operatorCap/g,
+      /maxDelegation/g,
+      /require\s*\([^)]*limit/gi,
+    ],
+    remediation:
+      "Implement per-operator maximum stake limits. " +
+      "require(operatorShares[operator] + amount <= maxOperatorStake, 'Operator cap exceeded'); " +
+      "Consider governance-controlled operator whitelisting and periodic rebalancing.",
+    references: ["https://github.com/Layr-Labs/eigenlayer-contracts"],
+  },
+
+  // =========================================================================
+  // POINTS / AIRDROP PROTOCOLS
+  // =========================================================================
+
+  // CUSTOM-029: Merkle Airdrop Double-Claim
+  {
+    id: "CUSTOM-029",
+    title: "Merkle Airdrop Double-Claim Vulnerability",
+    description:
+      "Merkle tree-based airdrop contracts that do not properly track claimed leaves " +
+      "allow users to claim multiple times. Common mistakes include: " +
+      "using a bitmap that is too small, not setting the claimed bit before transferring, " +
+      "or using a mapping keyed only by index (not by recipient address).",
+    severity: Severity.CRITICAL,
+    patterns: [
+      // claim function without a claimed mapping/bitmap check before transfer
+      /function\s+claim\w*\s*\([^)]*\)[^{]*\{(?:(?!claimed\[|isClaimed|BitMaps)[\s\S])*?(?:transfer|mint)\s*\(/gis,
+      // MerkleProof.verify without marking as claimed
+      /MerkleProof\.verify\s*\([^)]*\)(?:(?!claimed\s*\[|setClaimed|_setClaimed)[\s\S])*?transfer/gs,
+    ],
+    negativePatterns: [
+      /claimed\s*\[/g,
+      /isClaimed\s*\(/g,
+      /BitMaps\.\w+/g,
+      /require\s*\(\s*!claimed/g,
+    ],
+    remediation:
+      "Mark the claim as used BEFORE transferring tokens (CEI pattern): " +
+      "require(!claimed[index], 'Already claimed'); claimed[index] = true; token.transfer(account, amount); " +
+      "Use OpenZeppelin's BitMaps for gas-efficient storage of large claim sets.",
+    references: [
+      "https://docs.openzeppelin.com/contracts/api/utils#MerkleProof",
+      "https://github.com/Uniswap/merkle-distributor",
+    ],
+  },
+
+  // CUSTOM-030: Points Vesting Bypass via Transfer
+  {
+    id: "CUSTOM-030",
+    title: "Points/Vesting Bypass via Token Transfer",
+    description:
+      "Points or reward systems that vest over time can be bypassed if the underlying " +
+      "token is freely transferable. A user can transfer their vesting position to " +
+      "a fresh address to reset cooldowns, or claim points accumulated from a " +
+      "position they no longer hold by front-running the transfer.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Points claimed based on balance without checking transfer history
+      /function\s+claim(?:Points|Rewards|Emissions)\w*\s*\([^)]*\)[^{]*\{(?:(?!lastTransfer|transferBlock|vestedAt|lockPeriod)[\s\S])*?balanceOf/gis,
+      // Vesting schedule not invalidated on transfer
+      /function\s+(?:transfer|transferFrom)\s*\([^)]*\)[^{]*\{(?:(?!vestingStart|resetVest|clearRewards)[\s\S])*?super\.transfer/gs,
+    ],
+    negativePatterns: [/vestingStart\s*\[/g, /lastTransfer\s*\[/g, /lockPeriod/g, /soulbound/gi],
+    remediation:
+      "Track points per address with a snapshot of when the position was acquired. " +
+      "On transfer, reset or pro-rate the vesting schedule for the recipient. " +
+      "Consider non-transferable (soulbound) receipt tokens for vesting positions. " +
+      "Use ERC-4626 vaults where the vault tracks the original depositor.",
+    references: ["https://eips.ethereum.org/EIPS/eip-5192"],
+  },
+
+  // CUSTOM-031: Sybil-Vulnerable Points Accumulation
+  {
+    id: "CUSTOM-031",
+    title: "Sybil-Vulnerable Points Accumulation",
+    description:
+      "Points protocols that award points based on on-chain actions without Sybil resistance " +
+      "allow attackers to create many wallets to multiply their points. " +
+      "Common patterns: points per deposit/withdrawal (can be split across wallets), " +
+      "points per transaction (atomic splits), or points capped per address (bypassed with multiple addresses).",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // Points awarded per action without minimum threshold or rate limiting
+      /points\s*\[\s*msg\.sender\s*\]\s*\+=\s*\w+/g,
+      /function\s+earn(?:Points|Rewards)\w*\s*\([^)]*\)[^{]*\{(?:(?!minimumAmount|minDeposit|rateLimit|cooldown)[\s\S])*?points\s*\[/gis,
+    ],
+    negativePatterns: [/minimumDeposit/g, /minAmount/g, /cooldown\s*\[/g, /rateLimit/g, /KYC/gi],
+    remediation:
+      "Implement minimum deposit thresholds to make Sybil attacks economically unattractive. " +
+      "Add cooldown periods between point-earning actions per address. " +
+      "Consider off-chain Sybil resistance (Gitcoin Passport, Proof of Humanity) for high-value airdrops.",
+    references: [
+      "https://medium.com/dragonfly-research/the-anatomy-of-a-sybil-attack-7e50d8e53bb9",
+    ],
+  },
+
+  // =========================================================================
+  // ACCOUNT ABSTRACTION (ERC-4337)
+  // =========================================================================
+
+  // CUSTOM-032: Paymaster Drain via Malicious UserOperation
+  {
+    id: "CUSTOM-032",
+    title: "ERC-4337 Paymaster Drain via Malicious UserOperation",
+    description:
+      "ERC-4337 Paymasters sponsor gas for UserOperations. A paymaster that does not " +
+      "properly validate the UserOperation before sponsoring it can be drained. " +
+      "Common vulnerabilities: not checking the sender's entitlement to sponsorship, " +
+      "not limiting the gas sponsorship per user, or not validating the callData " +
+      "that the paymaster is expected to subsidize.",
+    severity: Severity.CRITICAL,
+    patterns: [
+      // validatePaymasterUserOp without checking sender or callData
+      /function\s+validatePaymasterUserOp\s*\([^)]*\)[^{]*\{(?:(?!userOp\.sender|userOp\.callData|allowlist|whitelist|limit)[\s\S])*?return\s*\(/gis,
+      // Paymaster approving without amount limit
+      /function\s+validatePaymasterUserOp[^{]*\{(?:(?!maxGas|gasLimit|budget|quota)[\s\S])*?abi\.encode\s*\(/gs,
+    ],
+    negativePatterns: [
+      /allowedSender\s*\[/g,
+      /require\s*\([^)]*sender/gi,
+      /gasQuota\s*\[/g,
+      /budgetUsed\s*\[/g,
+    ],
+    remediation:
+      "In validatePaymasterUserOp, always validate: " +
+      "(1) the sender is whitelisted or meets sponsorship criteria; " +
+      "(2) the callData targets an allowed contract; " +
+      "(3) the gas limit is within the paymaster's per-user budget. " +
+      "Track and enforce per-address gas budgets to prevent drain.",
+    references: [
+      "https://eips.ethereum.org/EIPS/eip-4337",
+      "https://docs.stackup.sh/docs/paymaster-overview",
+    ],
+  },
+
+  // CUSTOM-033: Session Key Scope Bypass in Smart Account
+  {
+    id: "CUSTOM-033",
+    title: "ERC-4337 Session Key Scope Bypass",
+    description:
+      "Smart accounts (ERC-4337) often support session keys — temporary keys with limited " +
+      "permissions (e.g., only interact with specific contracts, maximum spend). " +
+      "If session key validation does not strictly enforce the scope (allowed contracts, " +
+      "token limits, expiry), a compromised session key can be used for actions " +
+      "outside its intended scope.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Session key validation without checking target or value
+      /function\s+validateUserOp\s*\([^)]*\)[^{]*\{[^}]*sessionKey[^}]*\{(?:(?!allowedTarget|allowedContract|maxValue|expiry|deadline)[\s\S])*?return\s*0/gis,
+      // Session key without expiry check
+      /sessionKeys?\s*\[[^\]]+\](?:(?!expir|deadline|validUntil)[\s\S])*?=\s*true/gis,
+    ],
+    negativePatterns: [
+      /sessionKey\.expiry/g,
+      /sessionKey\.validUntil/g,
+      /allowedTarget/g,
+      /require\s*\([^)]*expir/gi,
+    ],
+    remediation:
+      "Enforce strict session key scopes: " +
+      "require(block.timestamp < sessionKey.expiry, 'Session expired'); " +
+      "require(target == sessionKey.allowedContract, 'Target not allowed'); " +
+      "require(value <= sessionKey.maxValue, 'Value exceeds limit'); " +
+      "Consider ERC-7715 (Permission Grants) for standardized session key management.",
+    references: [
+      "https://eips.ethereum.org/EIPS/eip-4337",
+      "https://eips.ethereum.org/EIPS/eip-7715",
+    ],
+  },
+
+  // CUSTOM-034: Bundler Griefing via Gas Estimation Manipulation
+  {
+    id: "CUSTOM-034",
+    title: "ERC-4337 Bundler Griefing via Gas Manipulation",
+    description:
+      "ERC-4337 bundlers simulate UserOperations before including them in a bundle. " +
+      "If validateUserOp passes during simulation but reverts during execution " +
+      "(due to state changes between simulation and execution), the bundler loses gas. " +
+      "Contracts that intentionally behave differently during simulation vs execution " +
+      "(e.g., checking block.number or using different code paths for EntryPoint calls) " +
+      "can grief bundlers.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // validateUserOp checking block number or timestamp (simulation vs execution difference)
+      /function\s+validateUserOp\s*\([^)]*\)[^{]*\{[^}]*block\.(?:number|timestamp)/gs,
+      // Different behavior based on msg.sender in validateUserOp
+      /function\s+validateUserOp\s*\([^)]*\)[^{]*\{[^}]*if\s*\(\s*msg\.sender\s*(?:==|!=)/gs,
+    ],
+    negativePatterns: [/IEntryPoint/g, /entryPoint\s*\(/g],
+    remediation:
+      "Ensure validateUserOp is deterministic — the same result during simulation and execution. " +
+      "Avoid state-dependent conditionals in validation. " +
+      "Use the nonce and signature for all validation logic, not block variables. " +
+      "Follow the ERC-4337 forbidden opcodes list (TIMESTAMP, NUMBER, BLOCKHASH, etc.) in validation.",
+    references: [
+      "https://eips.ethereum.org/EIPS/eip-4337#forbidden-opcodes",
+      "https://docs.stackup.sh/docs/erc-4337-overview",
+    ],
+  },
 ];
 
 // ============================================================================

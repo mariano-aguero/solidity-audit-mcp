@@ -23,7 +23,7 @@ export const AnalyzeContractInputSchema = z.object({
     .default(false)
     .describe("Whether to run forge tests as part of the analysis"),
   analyzers: z
-    .array(z.enum(["slither", "aderyn", "slang", "gas"]))
+    .array(z.enum(["slither", "aderyn", "slang", "gas", "echidna", "halmos"]))
     .optional()
     .describe("Specific analyzers to run (runs all if omitted)"),
 });
