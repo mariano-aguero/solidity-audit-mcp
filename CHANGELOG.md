@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.0] - 2026-02-20
+
+### Added
+- **`explainFinding` knowledge base expanded** — 19 entries total (was 5). New entries:
+  - **SWC-101** Integer Overflow/Underflow — SafeMath, 0.8+ built-in checks, unchecked block risks
+  - **SWC-103** Floating Pragma — lock to exact compiler version, reproducible builds
+  - **SWC-104** Unchecked Return Value — SafeERC20, low-level call success checks
+  - **SWC-116** Block Timestamp Dependence — Chainlink VRF, tolerance buffers, L2 caveats
+  - **SWC-112** Delegatecall to Untrusted Callee — whitelist pattern, UUPS proxy guidance
+  - **CUSTOM-001** Array Length Mismatch — require length equality in batch functions
+  - **CUSTOM-005** Missing Zero Address Validation — Ownable2Step, constructor checks
+  - **CUSTOM-006** Missing Events for Critical State Changes — Slither detectors, indexed params
+  - **CUSTOM-011** Signature Without Replay Protection — EIP-712, nonce, deadline
+  - **CUSTOM-013** Hash Collision via abi.encodePacked — use abi.encode for dynamic types
+  - **CUSTOM-015** Division Before Multiplication — multiply first, PRBMath, fuzz tests
+  - **CUSTOM-016** Permit Without Deadline — MAX_PERMIT_VALIDITY enforcement
+  - **CUSTOM-017** Missing Access Control on Critical Function — AccessControl, permission matrix
+  - **CUSTOM-029** Merkle Double-Claim — bitmap tracking, index-in-leaf pattern
+- **Keyword map expanded** — 40+ new keyword aliases covering all 19 finding entries
+- **`formatNotFound` hint updated** — lists all new searchable keywords
+
+### Changed
+- Bumped version from `1.5.0` to `1.6.0`
+
+---
+
 ## [1.5.0] - 2026-02-20
 
 ### Added

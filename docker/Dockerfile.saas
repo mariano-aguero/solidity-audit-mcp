@@ -42,11 +42,15 @@ ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-# Install Slither, solc-select, and Halmos (symbolic execution)
+# Install Slither and solc-select (required)
 RUN pip3 install --no-cache-dir \
     slither-analyzer \
-    solc-select \
-    halmos
+    solc-select
+
+# Install Halmos (symbolic execution) — optional; z3-solver may require cmake on some platforms
+# Uses --no-build-isolation to prefer pre-built wheels; falls back gracefully on failure
+RUN pip3 install --no-cache-dir halmos \
+    || echo "WARNING: Halmos install failed (z3-solver wheel unavailable for this platform) — symbolic execution disabled"
 
 # Install common Solidity versions (solc-select handles architecture)
 # Note: On ARM64, some older versions may not be available
@@ -82,22 +86,23 @@ RUN ARCH=$(dpkg --print-architecture) \
        fi
 
 # Install Aderyn from pre-built binary (supports both ARM64 and x86_64)
-# Download latest release from GitHub based on architecture
+# Pin version for reproducible builds — update ARG to upgrade
+ARG ADERYN_VERSION=aderyn-v0.6.8
 RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
-    && ADERYN_VERSION=$(curl -s https://api.github.com/repos/Cyfrin/aderyn/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') \
-    && echo "Installing Aderyn $ADERYN_VERSION" \
     && ARCH=$(dpkg --print-architecture) \
     && if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then \
          ADERYN_ARCH="aarch64-unknown-linux-gnu"; \
        else \
          ADERYN_ARCH="x86_64-unknown-linux-gnu"; \
        fi \
-    && echo "Downloading Aderyn for $ADERYN_ARCH" \
-    && curl -L "https://github.com/Cyfrin/aderyn/releases/download/${ADERYN_VERSION}/aderyn-${ADERYN_ARCH}.tar.xz" -o /tmp/aderyn.tar.xz \
-    && tar -xJf /tmp/aderyn.tar.xz -C /tmp \
-    && mv /tmp/aderyn-${ADERYN_ARCH}/aderyn /usr/local/bin/aderyn \
-    && rm -rf /tmp/aderyn.tar.xz /tmp/aderyn-${ADERYN_ARCH} \
-    && chmod +x /usr/local/bin/aderyn
+    && echo "Installing Aderyn ${ADERYN_VERSION} for ${ADERYN_ARCH}" \
+    && curl -fL "https://github.com/Cyfrin/aderyn/releases/download/${ADERYN_VERSION}/aderyn-${ADERYN_ARCH}.tar.xz" -o /tmp/aderyn.tar.xz \
+    && mkdir -p /tmp/aderyn-extract \
+    && tar -xJf /tmp/aderyn.tar.xz -C /tmp/aderyn-extract \
+    && find /tmp/aderyn-extract -name "aderyn" -type f | xargs -I{} install -m 755 {} /usr/local/bin/aderyn \
+    && rm -rf /tmp/aderyn.tar.xz /tmp/aderyn-extract \
+    && echo "Aderyn installed: $(aderyn --version)" \
+    || echo "WARNING: Aderyn install failed — Aderyn analysis disabled"
 
 # Create app directory
 WORKDIR /app

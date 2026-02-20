@@ -6,6 +6,8 @@
  */
 
 import { execa } from "execa";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 import { SERVER_NAME, SERVER_VERSION, HEALTH_CACHE_TTL } from "../config.js";
 import { TOOLS } from "../tools/toolDefinitions.js";
@@ -27,10 +29,15 @@ export interface HealthStatus {
   uptime: number;
   tools: number;
   analyzers: {
+    // External binaries
     slither: AnalyzerStatus;
     aderyn: AnalyzerStatus;
     forge: AnalyzerStatus;
     solc: AnalyzerStatus;
+    echidna: AnalyzerStatus;
+    halmos: AnalyzerStatus;
+    // Internal (Node.js package — no binary required)
+    slang: AnalyzerStatus;
   };
   timestamp: string;
 }
@@ -76,11 +83,36 @@ async function checkAnalyzer(
 }
 
 /**
+ * Check if the @nomicfoundation/slang npm package is available.
+ */
+async function checkSlang(): Promise<AnalyzerStatus> {
+  try {
+    // The package is a Node.js native addon — verify the module directory exists
+    const slangDir = join(
+      new URL("../../../", import.meta.url).pathname,
+      "node_modules/@nomicfoundation/slang"
+    );
+    if (!existsSync(slangDir)) {
+      return { available: false, error: "@nomicfoundation/slang package not found" };
+    }
+    // Try actually importing to confirm the native binary loads
+    const { NonterminalKind } = await import("@nomicfoundation/slang/cst");
+    const version = NonterminalKind ? "available" : "unknown";
+    return { available: true, version };
+  } catch (error) {
+    return {
+      available: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+/**
  * Get full health status with analyzer availability.
  */
 async function getHealthStatus(): Promise<HealthStatus> {
   // Run all checks in parallel
-  const [slither, aderyn, forge, solc] = await Promise.all([
+  const [slither, aderyn, forge, solc, echidna, halmos, slang] = await Promise.all([
     checkAnalyzer("slither", ["--version"], (out) => out.trim()),
     checkAnalyzer(
       "aderyn",
@@ -90,25 +122,37 @@ async function getHealthStatus(): Promise<HealthStatus> {
     checkAnalyzer(
       "forge",
       ["--version"],
-      (out) => out.match(/forge\s+([\d.]+)/i)?.[1] || out.trim()
+      (out) => out.match(/Version:\s*([\d.]+(?:-\w+)?)/i)?.[1] ?? out.split("\n")[0]?.trim() ?? out.trim()
     ),
     checkAnalyzer(
       "solc",
       ["--version"],
       (out) => out.match(/Version:\s*([\d.]+)/)?.[1] || out.trim()
     ),
+    checkAnalyzer(
+      "echidna",
+      ["--version"],
+      (out) => out.match(/Echidna\s+([\d.]+)/i)?.[1] || out.trim()
+    ),
+    checkAnalyzer(
+      "halmos",
+      ["--version"],
+      (out) => out.match(/halmos\s+([\d.]+)/i)?.[1] || out.trim()
+    ),
+    checkSlang(),
   ]);
 
-  const analyzers = { slither, aderyn, forge, solc };
+  const analyzers = { slither, aderyn, forge, solc, echidna, halmos, slang };
 
-  // Determine overall status
-  const availableCount = Object.values(analyzers).filter((a) => a.available).length;
+  // Determine overall status based on core tools (slither + forge = static analysis backbone)
+  // Slang is internal so always expected; echidna/halmos are opt-in fuzzers
+  const coreAvailable = [slither, forge].filter((a) => a.available).length;
   let status: HealthStatus["status"];
 
-  if (availableCount === 4) {
-    status = "healthy";
-  } else if (availableCount >= 2) {
-    status = "degraded"; // Can still do some analysis
+  if (coreAvailable === 2) {
+    status = "healthy"; // Both core analyzers available
+  } else if (coreAvailable === 1 || slang.available) {
+    status = "degraded"; // Can still do pattern/slang analysis
   } else {
     status = "unhealthy";
   }

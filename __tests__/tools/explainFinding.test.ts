@@ -270,13 +270,209 @@ describe("Explain Finding Tool", () => {
     });
 
     it("all known finding IDs should return non-empty strings", async () => {
-      const ids = ["SWC-107", "SWC-115", "CUSTOM-018", "CUSTOM-004", "CUSTOM-032"];
+      const ids = [
+        "SWC-107",
+        "SWC-115",
+        "SWC-101",
+        "SWC-103",
+        "SWC-104",
+        "SWC-116",
+        "SWC-112",
+        "CUSTOM-018",
+        "CUSTOM-004",
+        "CUSTOM-032",
+        "CUSTOM-001",
+        "CUSTOM-005",
+        "CUSTOM-006",
+        "CUSTOM-011",
+        "CUSTOM-013",
+        "CUSTOM-015",
+        "CUSTOM-016",
+        "CUSTOM-017",
+        "CUSTOM-029",
+      ];
 
       for (const id of ids) {
         const result = await explainFinding({ findingId: id });
         expect(typeof result).toBe("string");
         expect(result.length).toBeGreaterThan(0);
       }
+    });
+  });
+
+  describe("New SWC entries", () => {
+    it("should return detailed explanation for SWC-101", async () => {
+      const result = await explainFinding({ findingId: "SWC-101" });
+
+      expect(result).toContain("SWC-101");
+      expect(result.toLowerCase()).toMatch(/overflow|underflow/);
+    });
+
+    it("should return detailed explanation for SWC-103", async () => {
+      const result = await explainFinding({ findingId: "SWC-103" });
+
+      expect(result).toContain("SWC-103");
+      expect(result.toLowerCase()).toContain("pragma");
+    });
+
+    it("should return detailed explanation for SWC-104", async () => {
+      const result = await explainFinding({ findingId: "SWC-104" });
+
+      expect(result).toContain("SWC-104");
+      expect(result.toLowerCase()).toMatch(/return value|transfer/);
+    });
+
+    it("should return detailed explanation for SWC-116", async () => {
+      const result = await explainFinding({ findingId: "SWC-116" });
+
+      expect(result).toContain("SWC-116");
+      expect(result.toLowerCase()).toContain("timestamp");
+    });
+
+    it("should return detailed explanation for SWC-112", async () => {
+      const result = await explainFinding({ findingId: "SWC-112" });
+
+      expect(result).toContain("SWC-112");
+      expect(result.toLowerCase()).toContain("delegatecall");
+    });
+  });
+
+  describe("New CUSTOM entries", () => {
+    it("should return detailed explanation for CUSTOM-001", async () => {
+      const result = await explainFinding({ findingId: "CUSTOM-001" });
+
+      expect(result).toContain("CUSTOM-001");
+      expect(result.toLowerCase()).toMatch(/array|length/);
+    });
+
+    it("should return detailed explanation for CUSTOM-005", async () => {
+      const result = await explainFinding({ findingId: "CUSTOM-005" });
+
+      expect(result).toContain("CUSTOM-005");
+      expect(result.toLowerCase()).toMatch(/zero address|address\(0\)/);
+    });
+
+    it("should return detailed explanation for CUSTOM-006", async () => {
+      const result = await explainFinding({ findingId: "CUSTOM-006" });
+
+      expect(result).toContain("CUSTOM-006");
+      expect(result.toLowerCase()).toContain("event");
+    });
+
+    it("should return detailed explanation for CUSTOM-011", async () => {
+      const result = await explainFinding({ findingId: "CUSTOM-011" });
+
+      expect(result).toContain("CUSTOM-011");
+      expect(result.toLowerCase()).toMatch(/replay|nonce|signature/);
+    });
+
+    it("should return detailed explanation for CUSTOM-013", async () => {
+      const result = await explainFinding({ findingId: "CUSTOM-013" });
+
+      expect(result).toContain("CUSTOM-013");
+      expect(result.toLowerCase()).toMatch(/encodepacked|hash collision/);
+    });
+
+    it("should return detailed explanation for CUSTOM-015", async () => {
+      const result = await explainFinding({ findingId: "CUSTOM-015" });
+
+      expect(result).toContain("CUSTOM-015");
+      expect(result.toLowerCase()).toMatch(/division|precision/);
+    });
+
+    it("should return detailed explanation for CUSTOM-016", async () => {
+      const result = await explainFinding({ findingId: "CUSTOM-016" });
+
+      expect(result).toContain("CUSTOM-016");
+      expect(result.toLowerCase()).toMatch(/permit|deadline/);
+    });
+
+    it("should return detailed explanation for CUSTOM-017", async () => {
+      const result = await explainFinding({ findingId: "CUSTOM-017" });
+
+      expect(result).toContain("CUSTOM-017");
+      expect(result.toLowerCase()).toMatch(/access control/);
+    });
+
+    it("should return detailed explanation for CUSTOM-029", async () => {
+      const result = await explainFinding({ findingId: "CUSTOM-029" });
+
+      expect(result).toContain("CUSTOM-029");
+      expect(result.toLowerCase()).toMatch(/merkle|airdrop/);
+    });
+  });
+
+  describe("New keyword matches", () => {
+    it("should match 'overflow' to SWC-101", async () => {
+      const result = await explainFinding({ findingId: "overflow" });
+
+      expect(result).toContain("SWC-101");
+    });
+
+    it("should match 'timestamp' to SWC-116", async () => {
+      const result = await explainFinding({ findingId: "timestamp" });
+
+      expect(result).toContain("SWC-116");
+    });
+
+    it("should match 'delegatecall' to SWC-112", async () => {
+      const result = await explainFinding({ findingId: "delegatecall" });
+
+      expect(result).toContain("SWC-112");
+    });
+
+    it("should match 'array length' to CUSTOM-001", async () => {
+      const result = await explainFinding({ findingId: "array length" });
+
+      expect(result).toContain("CUSTOM-001");
+    });
+
+    it("should match 'zero address' to CUSTOM-005", async () => {
+      const result = await explainFinding({ findingId: "zero address" });
+
+      expect(result).toContain("CUSTOM-005");
+    });
+
+    it("should match 'replay' to CUSTOM-011", async () => {
+      const result = await explainFinding({ findingId: "replay" });
+
+      expect(result).toContain("CUSTOM-011");
+    });
+
+    it("should match 'merkle' to CUSTOM-029", async () => {
+      const result = await explainFinding({ findingId: "merkle" });
+
+      expect(result).toContain("CUSTOM-029");
+    });
+
+    it("should match 'access control' to CUSTOM-017", async () => {
+      const result = await explainFinding({ findingId: "access control" });
+
+      expect(result).toContain("CUSTOM-017");
+    });
+
+    it("should match 'permit' to CUSTOM-016", async () => {
+      const result = await explainFinding({ findingId: "permit" });
+
+      expect(result).toContain("CUSTOM-016");
+    });
+
+    it("should match 'precision loss' to CUSTOM-015", async () => {
+      const result = await explainFinding({ findingId: "precision loss" });
+
+      expect(result).toContain("CUSTOM-015");
+    });
+
+    it("should match 'hash collision' to CUSTOM-013", async () => {
+      const result = await explainFinding({ findingId: "hash collision" });
+
+      expect(result).toContain("CUSTOM-013");
+    });
+
+    it("should match 'airdrop' to CUSTOM-029", async () => {
+      const result = await explainFinding({ findingId: "airdrop" });
+
+      expect(result).toContain("CUSTOM-029");
     });
   });
 });
