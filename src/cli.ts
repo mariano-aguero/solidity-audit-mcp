@@ -23,6 +23,8 @@ import { existsSync, writeFileSync } from "node:fs";
 import { analyzeContract } from "./tools/analyzeContract.js";
 import { diffAudit } from "./tools/diffAudit.js";
 import { optimizeGas, formatGasOptimizationResult } from "./tools/optimizeGas.js";
+import { generateInvariants } from "./tools/generateInvariants.js";
+import { explainFinding } from "./tools/explainFinding.js";
 import { Severity, type Finding } from "./types/index.js";
 import { generateSarifReport } from "./utils/sarif.js";
 import { logger } from "./utils/logger.js";
@@ -41,6 +43,8 @@ interface CliOptions {
   quiet: boolean;
   noColor: boolean;
   output: string | null;
+  protocol: string;
+  context: string | null;
 }
 
 // ============================================================================
@@ -60,6 +64,8 @@ Commands:
   audit <path>              Run security analysis on a Solidity contract
   diff <old-path> <new-path> Compare two versions of a contract
   gas <path>                Analyze gas optimizations
+  invariants <path>         Generate Foundry invariant test templates
+  explain <finding-id>      Explain a finding (SWC-107, CUSTOM-032, 'reentrancy', etc.)
   help                      Show this help message
   version                   Show version
 
@@ -68,6 +74,8 @@ Options:
   --output, -o <file>       Write output to file instead of stdout
   --severity, -s <level>    Minimum severity: critical, high, medium, low, informational (default: low)
   --focus-only              For diff: only analyze changed parts (default: true)
+  --protocol, -p <type>     For invariants: erc20, vault, lending, amm, governance, staking, auto (default: auto)
+  --context, -c <text>      For explain: brief contract description for tailored output
   --quiet, -q               Suppress progress messages
   --no-color                Disable colored output
 
@@ -76,6 +84,9 @@ Examples:
   ${PROGRAM_NAME} audit ./contracts/Token.sol --format sarif -o results.sarif
   ${PROGRAM_NAME} diff ./old/Token.sol ./new/Token.sol
   ${PROGRAM_NAME} gas ./contracts/Token.sol --format json
+  ${PROGRAM_NAME} invariants ./contracts/Vault.sol --protocol vault
+  ${PROGRAM_NAME} explain SWC-107
+  ${PROGRAM_NAME} explain reentrancy --context "ERC-4626 vault"
 
 CI/CD Integration (GitHub Code Scanning):
   ${PROGRAM_NAME} audit src/ --format sarif --output audit-results.sarif
@@ -131,6 +142,15 @@ function parseCliArgs(): { command: string; args: string[]; options: CliOptions 
           type: "boolean",
           default: false,
         },
+        protocol: {
+          type: "string",
+          short: "p",
+          default: "auto",
+        },
+        context: {
+          type: "string",
+          short: "c",
+        },
         help: {
           type: "boolean",
           short: "h",
@@ -175,6 +195,8 @@ function parseCliArgs(): { command: string; args: string[]; options: CliOptions 
       quiet: values["quiet"] as boolean,
       noColor: values["no-color"] as boolean,
       output: values["output"] ? resolve(values["output"] as string) : null,
+      protocol: (values["protocol"] as string) || "auto",
+      context: (values["context"] as string) || null,
     };
 
     const command = positionals[0] ?? "help";
@@ -197,6 +219,8 @@ function getDefaultOptions(): CliOptions {
     quiet: false,
     noColor: false,
     output: null,
+    protocol: "auto",
+    context: null,
   };
 }
 
@@ -352,6 +376,83 @@ async function runGas(contractPath: string, options: CliOptions): Promise<number
     return hasHighSeverity ? 1 : 0;
   } catch (error) {
     logError(`Gas analysis failed: ${error instanceof Error ? error.message : String(error)}`);
+    return 2;
+  }
+}
+
+async function runInvariants(contractPath: string, options: CliOptions): Promise<number> {
+  const absolutePath = resolve(contractPath);
+
+  if (!existsSync(absolutePath)) {
+    logError(`File not found: ${absolutePath}`);
+    return 2;
+  }
+
+  if (!absolutePath.endsWith(".sol")) {
+    logError("Only Solidity (.sol) files are supported");
+    return 2;
+  }
+
+  const validProtocols = [
+    "auto",
+    "erc20",
+    "erc721",
+    "vault",
+    "lending",
+    "amm",
+    "governance",
+    "staking",
+  ];
+  if (!validProtocols.includes(options.protocol)) {
+    logError(`Invalid protocol type: ${options.protocol}. Use: ${validProtocols.join(", ")}`);
+    return 2;
+  }
+
+  if (!options.quiet) {
+    logInfo(`Generating invariants for ${basename(absolutePath)}...`);
+  }
+
+  try {
+    const result = await generateInvariants({
+      contractPath: absolutePath,
+      protocolType: options.protocol as
+        | "auto"
+        | "erc20"
+        | "erc721"
+        | "vault"
+        | "lending"
+        | "amm"
+        | "governance"
+        | "staking",
+      includeStateful: true,
+    });
+
+    writeOutput(result, options);
+    return 0;
+  } catch (error) {
+    logError(
+      `Invariant generation failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return 2;
+  }
+}
+
+async function runExplain(findingId: string, options: CliOptions): Promise<number> {
+  if (!findingId) {
+    logError("Missing finding ID. Usage: solidity-audit-cli explain <finding-id>");
+    return 2;
+  }
+
+  try {
+    const result = await explainFinding({
+      findingId,
+      contractContext: options.context ?? undefined,
+    });
+
+    writeOutput(result, options);
+    return 0;
+  } catch (error) {
+    logError(`Explain failed: ${error instanceof Error ? error.message : String(error)}`);
     return 2;
   }
 }
@@ -558,6 +659,28 @@ async function main(): Promise<void> {
           exitCode = 2;
         } else {
           exitCode = await runGas(path, options);
+        }
+        break;
+      }
+
+      case "invariants": {
+        const path = args[0];
+        if (!path) {
+          logError("Missing contract path. Usage: solidity-audit-cli invariants <path>");
+          exitCode = 2;
+        } else {
+          exitCode = await runInvariants(path, options);
+        }
+        break;
+      }
+
+      case "explain": {
+        const findingId = args[0];
+        if (!findingId) {
+          logError("Missing finding ID. Usage: solidity-audit-cli explain <finding-id>");
+          exitCode = 2;
+        } else {
+          exitCode = await runExplain(findingId, options);
         }
         break;
       }

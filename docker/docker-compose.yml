@@ -14,8 +14,10 @@ services:
   mcp-server:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.saas
     container_name: solidity-audit-mcp
+    # Override the HTTP server entrypoint — run stdio MCP transport instead
+    entrypoint: ["node", "dist/index.js"]
     volumes:
       # Mount your contracts directory
       - ../contracts:/contracts:ro
@@ -34,7 +36,7 @@ services:
   cli:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.saas
     volumes:
       - ../contracts:/contracts
       - ../:/workspace

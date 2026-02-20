@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] - 2026-02-20
+
+### Added
+- **CLI `invariants` command** — `solidity-audit-cli invariants <path> [--protocol auto|erc20|vault|...]` generates Foundry invariant test templates from the command line
+- **CLI `explain` command** — `solidity-audit-cli explain <finding-id> [--context "..."]` explains any SWC/CUSTOM finding ID or keyword
+- **Docker convenience scripts** — `docker:dev:build`, `docker:dev:up`, `docker:dev:down`, `docker:dev:logs` in package.json
+
+### Fixed
+- **docker-compose.yml** — `mcp-server` and `cli` services referenced a non-existent `Dockerfile`; now correctly use `docker/Dockerfile.saas` with a proper entrypoint override (`node dist/index.js`) for the stdio MCP transport
+- **Echidna/Halmos excluded from default run** — `AnalyzerOrchestrator.selectAnalyzers()` now filters out `echidna` and `halmos` from the automatic pipeline; they require contracts with `echidna_*` / `check_*` functions and must be requested explicitly via the `analyzers` parameter
+- **`docker:build` and `docker:run` scripts** — updated to use `docker/Dockerfile.saas` and correct entrypoints (was referencing the old root-level Dockerfile)
+
+### Changed
+- Bumped version from `1.4.0` to `1.5.0`
+
+---
+
 ## [1.4.0] - 2026-02-20
 
 ### Added

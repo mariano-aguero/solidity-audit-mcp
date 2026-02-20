@@ -235,6 +235,12 @@ export class AnalyzerOrchestrator {
       analyzers = registry.getAll();
     }
 
+    // Fuzzing analyzers (Echidna, Halmos) require special contract structure
+    // (echidna_* / check_* functions) and must be requested explicitly via analyzeWith().
+    // Exclude them from the default auto-run to avoid slow no-op runs.
+    const FUZZER_IDS = new Set(["echidna", "halmos"]);
+    analyzers = analyzers.filter((a) => !FUZZER_IDS.has(a.id));
+
     // Remove disabled analyzers
     if (this.config.disabledAnalyzers && this.config.disabledAnalyzers.length > 0) {
       const disabledSet = new Set(this.config.disabledAnalyzers);
