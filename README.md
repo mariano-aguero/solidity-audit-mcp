@@ -301,7 +301,7 @@ npm run build
 
 # Verify the build
 node dist/index.js
-# Should output: [INFO] Starting solidity-audit-mcp v1.2.0
+# Should output: [INFO] Starting solidity-audit-mcp v1.6.0
 # Press Ctrl+C to exit
 ```
 
@@ -340,10 +340,16 @@ npm run docker:shell
 
 The Docker image includes:
 - Node.js 20
-- Slither (Python)
-- Aderyn (Rust)
-- Foundry (forge, cast, anvil)
-- solc-select with common Solidity versions (0.8.28, 0.8.24, 0.8.20, 0.8.19, 0.8.17, 0.8.13, 0.8.0, 0.7.6, 0.6.12)
+- Slither (Python) — static analysis
+- Aderyn v0.6.8 (Rust) — fast AST-based detection
+- Foundry (forge, cast, anvil) — testing & coverage
+- solc-select with common Solidity versions (0.8.28, 0.8.24, 0.8.20, and more)
+- Halmos — symbolic execution (x86_64 only; ARM64 skipped gracefully)
+- Echidna — property fuzzer (x86_64 only; ARM64 skipped gracefully)
+
+**Platform notes:**
+- All tools work on x86_64 (standard CI/CD environments)
+- On ARM64 (Apple Silicon), Slither, Aderyn, and Forge are fully available; Echidna and Halmos require x86_64
 
 ## SaaS Mode (Remote Server)
 
@@ -442,23 +448,28 @@ With API key authentication:
 {
   "status": "healthy",
   "server": "solidity-audit-mcp",
-  "version": "1.0.0",
+  "version": "1.6.0",
   "uptime": 3600,
-  "tools": 8,
+  "tools": 10,
   "analyzers": {
-    "slither": { "available": true, "version": "0.10.0" },
-    "aderyn": { "available": true, "version": "0.5.0" },
-    "forge": { "available": true, "version": "0.2.0" },
-    "solc": { "available": true, "version": "0.8.28" }
+    "slither":  { "available": true,  "version": "0.11.5" },
+    "aderyn":   { "available": true,  "version": "0.6.8" },
+    "forge":    { "available": true,  "version": "1.5.1-stable" },
+    "solc":     { "available": true,  "version": "0.8.28" },
+    "echidna":  { "available": false, "error": "..." },
+    "halmos":   { "available": false, "error": "..." },
+    "slang":    { "available": true,  "version": "available" }
   },
-  "timestamp": "2024-01-15T10:30:00.000Z"
+  "timestamp": "2026-01-15T10:30:00.000Z"
 }
 ```
 
 Status values:
-- `healthy` - All analyzers available
-- `degraded` - Some analyzers available (2-3)
-- `unhealthy` - Less than 2 analyzers available (returns HTTP 503)
+- `healthy` — Core analyzers (Slither + Forge) available
+- `degraded` — Only one core analyzer available, or only Slang (built-in)
+- `unhealthy` — No analyzers available (returns HTTP 503)
+
+> **Note:** `echidna` and `halmos` are opt-in fuzzers that require explicit setup. Their absence does not affect the overall status.
 
 ### Environment Variables
 
@@ -752,14 +763,31 @@ Returns a detailed explanation of a security finding. Accepts SWC Registry IDs, 
 | `severity` | string | No | Severity level for additional context (`"critical"`, `"high"`, `"medium"`, `"low"`, `"informational"`) |
 | `contractContext` | string | No | Brief description of the contract to tailor the explanation |
 
-**Supported finding IDs:**
-- `SWC-107` — Reentrancy
-- `SWC-115` — Authorization through tx.origin
-- `CUSTOM-004` — Price oracle manipulation / flash loan attack
-- `CUSTOM-018` — ERC-7702 unprotected initializer
-- `CUSTOM-032` — ERC-4337 paymaster drain
+**Supported finding IDs (19 total):**
 
-**Supported keywords:** `reentrancy`, `tx.origin`, `flash loan`, `oracle`, `price manipulation`, `erc-7702`, `paymaster`, `session key`
+| ID | Title | Severity |
+|----|-------|----------|
+| `SWC-101` | Integer Overflow/Underflow | High |
+| `SWC-103` | Floating Pragma | Low |
+| `SWC-104` | Unchecked Return Value | High |
+| `SWC-107` | Reentrancy | Critical |
+| `SWC-112` | Delegatecall to Untrusted Callee | Critical |
+| `SWC-115` | Authorization through tx.origin | High |
+| `SWC-116` | Block Timestamp Dependence | Medium |
+| `CUSTOM-001` | Array Length Mismatch | High |
+| `CUSTOM-004` | Price Oracle Manipulation / Flash Loan Attack | Critical |
+| `CUSTOM-005` | Missing Zero Address Validation | Medium |
+| `CUSTOM-006` | Missing Events for Critical State Changes | Low |
+| `CUSTOM-011` | Signature Without Replay Protection | High |
+| `CUSTOM-013` | Hash Collision via abi.encodePacked | Medium |
+| `CUSTOM-015` | Division Before Multiplication | Medium |
+| `CUSTOM-016` | Permit Without Deadline | Medium |
+| `CUSTOM-017` | Missing Access Control on Critical Function | Critical |
+| `CUSTOM-018` | ERC-7702 Unprotected Initializer | Critical |
+| `CUSTOM-029` | Merkle Double-Claim | High |
+| `CUSTOM-032` | ERC-4337 Paymaster Drain | Critical |
+
+**Supported keywords:** `reentrancy`, `overflow`, `underflow`, `pragma`, `unchecked return`, `timestamp`, `delegatecall`, `tx.origin`, `array length`, `zero address`, `missing events`, `replay`, `nonce`, `encodepacked`, `hash collision`, `precision loss`, `permit`, `access control`, `merkle`, `airdrop`, `flash loan`, `oracle`, `erc-7702`, `paymaster`, `erc-4337`
 
 **Returns:**
 - Root cause analysis
@@ -1244,12 +1272,13 @@ solidity-audit-mcp/
 │   │   ├── IAnalyzer.ts      # Interface + BaseAnalyzer
 │   │   ├── AnalyzerRegistry.ts   # Factory + Registry
 │   │   ├── AnalyzerOrchestrator.ts # Parallel execution
-│   │   ├── adapters/         # Slither, Aderyn, Slang, Gas adapters
-│   │   ├── slither.ts        # Slither wrapper
-│   │   ├── aderyn.ts         # Aderyn wrapper
-│   │   ├── slangAnalyzer.ts  # AST parsing with @nomicfoundation/slang
-│   │   ├── gasOptimizer.ts   # Gas optimization
-│   │   └── diffAnalyzer.ts   # Contract diff analysis
+│   │   └── adapters/         # Self-contained adapters (each owns its full implementation)
+│   │       ├── SlitherAdapter.ts  # Slither runner + detector map
+│   │       ├── AderynAdapter.ts   # Aderyn runner + deduplication
+│   │       ├── SlangAdapter.ts    # AST parsing with @nomicfoundation/slang
+│   │       ├── GasAdapter.ts      # Gas optimization patterns
+│   │       ├── EchidnaAdapter.ts  # Property fuzzer (opt-in)
+│   │       └── HalmosAdapter.ts   # Symbolic execution (opt-in)
 │   │
 │   ├── tools/                # MCP tool implementations
 │   │   ├── analyzeContract.ts
@@ -1293,7 +1322,7 @@ solidity-audit-mcp/
 │       ├── severity.ts       # Severity utilities
 │       └── sarif.ts          # SARIF report generator
 │
-├── __tests__/                # Test files (404 tests)
+├── __tests__/                # Test files (486 tests)
 │   ├── analyzers/            # Adapter & orchestrator tests
 │   ├── tools/                # Tool integration tests
 │   ├── ci/                   # GitHub comment tests
@@ -1309,11 +1338,10 @@ solidity-audit-mcp/
 │   └── workflows/            # Example workflows
 │
 ├── docker/
+│   ├── Dockerfile.saas            # SaaS Docker (HTTP/SSE) — all tools included
+│   ├── Dockerfile.dev             # Development Docker (hot-reload)
 │   ├── docker-compose.yml         # Local container orchestration
 │   └── docker-compose.saas.yml    # SaaS deployment orchestration
-│
-├── Dockerfile              # Local Docker (stdio)
-├── Dockerfile.saas         # SaaS Docker (HTTP/SSE)
 ├── .env.example            # Environment variables template
 ├── package.json
 ├── tsconfig.json
@@ -1343,7 +1371,7 @@ Edit `src/tools/checkVulnerabilities.ts` and add to the `SWC_PATTERNS` array:
 
 ### Adding Slither detector mappings
 
-Edit `src/analyzers/slither.ts` and add to `SLITHER_DETECTOR_MAP`:
+Edit `src/analyzers/adapters/SlitherAdapter.ts` and add to `SLITHER_DETECTOR_MAP`:
 
 ```typescript
 "detector-name": {
@@ -1354,7 +1382,7 @@ Edit `src/analyzers/slither.ts` and add to `SLITHER_DETECTOR_MAP`:
 
 ### Adding code pattern detection
 
-Edit `src/analyzers/slangAnalyzer.ts`:
+Edit `src/analyzers/adapters/SlangAdapter.ts`:
 
 **For AST-based detection (preferred):** Add to `SECURITY_DETECTORS` and `QUERY_STRINGS`:
 
