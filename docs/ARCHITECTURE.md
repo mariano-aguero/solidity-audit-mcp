@@ -177,10 +177,10 @@ classDiagram
         +analyzeGasPatterns()
     }
     class EchidnaAdapter {
-        note: opt-in, requires echidna_* functions
+        <<opt-in fuzzer>>
     }
     class HalmosAdapter {
-        note: opt-in, requires check_* functions
+        <<opt-in symbolic>>
     }
 
     IAnalyzer <|.. BaseAnalyzer
@@ -190,6 +190,9 @@ classDiagram
     BaseAnalyzer <|-- GasAdapter
     BaseAnalyzer <|-- EchidnaAdapter
     BaseAnalyzer <|-- HalmosAdapter
+
+    note for EchidnaAdapter "requires echidna_* test functions"
+    note for HalmosAdapter "requires check_* test functions"
 
     class AnalyzerRegistry {
         +get(id)
