@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import { analyzeGasPatterns } from "../analyzers/gasOptimizer.js";
+import { analyzeGasPatterns } from "../analyzers/adapters/GasAdapter.js";
 import { Severity, Finding } from "../types/index.js";
 
 // ============================================================================

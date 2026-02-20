@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { SLITHER_DETECTOR_MAP, getSlitherDetectors } from "../../src/analyzers/slither.js";
+import { SLITHER_DETECTOR_MAP, getSlitherDetectors } from "../../src/analyzers/adapters/SlitherAdapter.js";
 
 describe("Slither Analyzer", () => {
   describe("SLITHER_DETECTOR_MAP", () => {

@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { writeFile, mkdir, rm } from "fs/promises";
 import { join } from "path";
-import { analyzeGasPatterns, GAS_PATTERNS } from "../../src/analyzers/gasOptimizer.js";
+import { analyzeGasPatterns, GAS_PATTERNS } from "../../src/analyzers/adapters/GasAdapter.js";
 import { Severity } from "../../src/types/index.js";
 
 const TEST_DIR = join(process.cwd(), "__tests__/fixtures/gas-optimizer");

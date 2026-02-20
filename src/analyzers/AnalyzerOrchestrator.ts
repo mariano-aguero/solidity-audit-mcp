@@ -24,7 +24,7 @@ import type {
   BaseAnalyzerOptions,
 } from "./types.js";
 import { getAnalyzerRegistry } from "./AnalyzerRegistry.js";
-import { deduplicateFindings } from "./aderyn.js";
+import { deduplicateFindings } from "./adapters/AderynAdapter.js";
 import { sortBySeverity } from "../utils/severity.js";
 import { logger } from "../utils/logger.js";
 

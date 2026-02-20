@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import { Severity, type Finding } from "../../src/types/index.js";
-import { deduplicateFindings } from "../../src/analyzers/aderyn.js";
+import { deduplicateFindings } from "../../src/analyzers/adapters/AderynAdapter.js";
 
 describe("Aderyn Analyzer", () => {
   describe("deduplicateFindings", () => {

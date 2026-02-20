@@ -14,9 +14,7 @@ import {
   extractChangedContext,
   assessChangeRisk,
 } from "../analyzers/diffAnalyzer.js";
-import { runSlither } from "../analyzers/slither.js";
-import { runAderyn } from "../analyzers/aderyn.js";
-import { checkToolsAvailable } from "../utils/executor.js";
+import { AnalyzerOrchestrator } from "../analyzers/AnalyzerOrchestrator.js";
 import {
   Finding,
   Severity,
@@ -116,12 +114,13 @@ export async function diffAudit(input: DiffAuditInput): Promise<DiffAuditResult>
     // -------------------------------------------------------------------------
     logger.info("[diff-audit] Running security analyzers...");
     const projectRoot = dirname(newPath);
-    const toolStatus = await checkToolsAvailable(["slither", "aderyn"]);
 
-    const [oldFindings, newFindings] = await Promise.all([
-      runAnalyzers(oldPath, projectRoot, toolStatus),
-      runAnalyzers(newPath, projectRoot, toolStatus),
+    const orchestrator = new AnalyzerOrchestrator();
+    const [oldResult, newResult] = await Promise.all([
+      orchestrator.analyzeWith(["slither", "aderyn"], { contractPath: oldPath, projectRoot }),
+      orchestrator.analyzeWith(["slither", "aderyn"], { contractPath: newPath, projectRoot }),
     ]);
+    const [oldFindings, newFindings] = [oldResult.findings, newResult.findings];
 
     // -------------------------------------------------------------------------
     // 5. Compare findings between versions
@@ -237,47 +236,6 @@ function createErrorResult(error: string): DiffAuditResult {
   };
 }
 
-interface ToolStatus {
-  [key: string]: { available: boolean; version?: string };
-}
-
-async function runAnalyzers(
-  contractPath: string,
-  projectRoot: string,
-  toolStatus: ToolStatus
-): Promise<Finding[]> {
-  const findings: Finding[] = [];
-
-  const hasSlither = toolStatus["slither"]?.available ?? false;
-  const hasAderyn = toolStatus["aderyn"]?.available ?? false;
-
-  const promises: Promise<Finding[]>[] = [];
-
-  if (hasSlither) {
-    promises.push(
-      runSlither(contractPath, projectRoot).catch((err) => {
-        logger.error(`[diff-audit] Slither failed: ${err.message}`);
-        return [];
-      })
-    );
-  }
-
-  if (hasAderyn) {
-    promises.push(
-      runAderyn(contractPath, projectRoot).catch((err) => {
-        logger.error(`[diff-audit] Aderyn failed: ${err.message}`);
-        return [];
-      })
-    );
-  }
-
-  const results = await Promise.all(promises);
-  for (const result of results) {
-    findings.push(...result);
-  }
-
-  return findings;
-}
 
 interface CompareResult {
   added: Finding[];

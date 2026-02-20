@@ -210,29 +210,18 @@ export async function handleApiCiReview(req: IncomingMessage): Promise<JsonRespo
         await mkdir(dirname(contractPath), { recursive: true });
         await writeFile(contractPath, source);
 
-        // Run analyzers directly to get structured findings
-        const { runSlither } = await import("../../analyzers/slither.js");
-        const { runAderyn } = await import("../../analyzers/aderyn.js");
-
-        const [slitherFindings, aderynFindings] = await Promise.allSettled([
-          runSlither(contractPath, tmpDir).catch(() => []),
-          runAderyn(contractPath, tmpDir).catch(() => []),
-        ]);
+        // Run analyzers via orchestrator
+        const { AnalyzerOrchestrator } = await import("../../analyzers/AnalyzerOrchestrator.js");
+        const orchestrator = new AnalyzerOrchestrator();
+        const orchResult = await orchestrator
+          .analyzeWith(["slither", "aderyn"], { contractPath, projectRoot: tmpDir })
+          .catch(() => ({ findings: [] as Finding[] }));
 
         const findings: Finding[] = [];
 
-        if (slitherFindings.status === "fulfilled") {
-          for (const f of slitherFindings.value) {
-            f.location.file = filename;
-            findings.push(f);
-          }
-        }
-
-        if (aderynFindings.status === "fulfilled") {
-          for (const f of aderynFindings.value) {
-            f.location.file = filename;
-            findings.push(f);
-          }
+        for (const f of orchResult.findings) {
+          f.location.file = filename;
+          findings.push(f);
         }
 
         // Run Slang analysis
