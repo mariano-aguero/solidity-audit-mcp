@@ -301,7 +301,7 @@ npm run build
 
 # Verify the build
 node dist/index.js
-# Should output: [INFO] Starting solidity-audit-mcp v1.0.0
+# Should output: [INFO] Starting solidity-audit-mcp v1.2.0
 # Press Ctrl+C to exit
 ```
 
@@ -571,6 +571,7 @@ Runs a complete security analysis pipeline on a Solidity contract.
 | `contractPath` | string | Yes | Path to the `.sol` file |
 | `projectRoot` | string | No | Root directory of the project (auto-detected if not provided) |
 | `runTests` | boolean | No | Whether to run forge tests as part of analysis (default: false) |
+| `analyzers` | string[] | No | Specific analyzers to run: `"slither"`, `"aderyn"`, `"slang"`, `"gas"`, `"echidna"`, `"halmos"` (runs all available if omitted) |
 
 **What it does:**
 1. Parses contract metadata (functions, state variables, inheritance)
@@ -711,6 +712,63 @@ Scans an entire project directory for Solidity contracts and audits all of them.
 - Aggregated findings across all contracts
 - Per-contract breakdown
 - Project-level risk assessment
+
+---
+
+### `generate_invariants`
+
+Analyzes a Solidity contract and generates ready-to-use Foundry invariant test templates. Auto-detects the protocol type from source code and inheritance to produce targeted invariants.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `contractPath` | string | Yes | Path to the `.sol` file |
+| `protocolType` | string | No | Protocol type: `"auto"` (default), `"erc20"`, `"erc721"`, `"vault"`, `"lending"`, `"amm"`, `"governance"`, `"staking"` |
+| `includeStateful` | boolean | No | Include stateful invariant suggestions with `forge test --invariant` run commands (default: true) |
+
+**Supported protocol types:**
+- **ERC-20** — totalSupply conservation, approve safety, transfer solvency
+- **ERC-4626 Vault** — totalAssets ≥ total share value, share price non-decreasing, deposit/withdraw round-trip
+- **Lending** — protocol solvency, liquidatable positions, non-negative interest accrual
+- **AMM** — constant product k, no free lunch on swap, LP share conservation
+- **Governance** — proposal state machine, quorum immutability, vote weight conservation
+- **Staking** — reward monotonicity, total staked balance, slash accounting
+- **Generic** — balance conservation, access control, no unauthorized mint/burn
+
+**Returns:**
+- Severity-classified invariant suggestions (Critical / High / Medium)
+- Ready-to-paste `invariant_*()` function bodies
+- Foundry setup template with handler contract
+- Run commands for `forge test --invariant`
+
+---
+
+### `explain_finding`
+
+Returns a detailed explanation of a security finding. Accepts SWC Registry IDs, custom detector IDs, or free-text keywords.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `findingId` | string | Yes | Finding ID or keyword — e.g. `"SWC-107"`, `"CUSTOM-032"`, `"reentrancy"`, `"flash loan"`, `"paymaster"` |
+| `severity` | string | No | Severity level for additional context (`"critical"`, `"high"`, `"medium"`, `"low"`, `"informational"`) |
+| `contractContext` | string | No | Brief description of the contract to tailor the explanation |
+
+**Supported finding IDs:**
+- `SWC-107` — Reentrancy
+- `SWC-115` — Authorization through tx.origin
+- `CUSTOM-004` — Price oracle manipulation / flash loan attack
+- `CUSTOM-018` — ERC-7702 unprotected initializer
+- `CUSTOM-032` — ERC-4337 paymaster drain
+
+**Supported keywords:** `reentrancy`, `tx.origin`, `flash loan`, `oracle`, `price manipulation`, `erc-7702`, `paymaster`, `session key`
+
+**Returns:**
+- Root cause analysis
+- Concrete impact description
+- Step-by-step exploit scenario
+- Vulnerable code example vs. secure code example
+- Foundry PoC test template
+- Remediation steps
+- References (SWC Registry, audit reports, research)
 
 ## CLI Usage
 

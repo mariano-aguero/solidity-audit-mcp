@@ -69,8 +69,8 @@ describe("AnalyzerRegistry", () => {
       // When: Getting all analyzers
       const analyzers = registry.getAll();
 
-      // Then: Should have 4 built-in analyzers
-      expect(analyzers.length).toBe(4);
+      // Then: Should have 6 built-in analyzers (slither, aderyn, slang, gas, echidna, halmos)
+      expect(analyzers.length).toBe(6);
     });
 
     it("should have registration info for all built-in analyzers", () => {

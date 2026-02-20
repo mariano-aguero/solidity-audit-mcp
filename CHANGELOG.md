@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-02-20
+
+### Added
+- **Tests for `generate_invariants`** — 19 tests covering auto-detection for ERC-20/lending protocols, explicit protocol types, stateful invariant inclusion, and error handling
+- **Tests for `explain_finding`** — 34 tests covering all 5 knowledge-base entries (SWC-107, SWC-115, CUSTOM-018, CUSTOM-004, CUSTOM-032), keyword matching, unknown IDs, and optional fields
+- **README documentation** for `generate_invariants` and `explain_finding` tools (previously undocumented)
+- **`analyzers` parameter** documented in `analyze_contract` README section (includes echidna/halmos)
+
+### Changed
+- Updated `AnalyzerRegistry` test to reflect 6 built-in analyzers (was hardcoded to 4 before Echidna/Halmos were added)
+- Bumped patch dependencies: `@nomicfoundation/slang` 1.3.2→1.3.3, `@types/node` 22.19.10→22.19.11, `@typescript-eslint/*` 8.55.0→8.56.0
+- Fixed version reference in README (`v1.0.0` → `v1.2.0`)
+- Bumped version from `1.2.0` to `1.3.0`
+
+---
+
 ## [1.2.0] - 2026-02-19
 
 ### Added

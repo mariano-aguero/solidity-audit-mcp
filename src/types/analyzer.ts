@@ -14,7 +14,7 @@ import type { Finding } from "./index.js";
 /**
  * Unique identifier for each analyzer type
  */
-export type AnalyzerId = "slither" | "aderyn" | "slang" | "gas" | "custom";
+export type AnalyzerId = "slither" | "aderyn" | "slang" | "gas" | "custom" | "echidna" | "halmos";
 
 /**
  * Analyzer capability flags
@@ -111,6 +111,36 @@ export interface CustomDetectorOptions extends BaseAnalyzerOptions {
 }
 
 /**
+ * Echidna fuzzing options
+ */
+export interface EchidnaOptions extends BaseAnalyzerOptions {
+  /** Number of test sequences to run */
+  testLimit?: number;
+  /** Corpus directory for seed inputs */
+  corpusDir?: string;
+  /** Contract name to fuzz (required when multiple contracts in file) */
+  contractName?: string;
+  /** Test mode: "property" | "assertion" | "optimization" | "exploration" */
+  testMode?: "property" | "assertion" | "optimization" | "exploration";
+  /** Solidity version override */
+  solcVersion?: string;
+}
+
+/**
+ * Halmos symbolic execution options
+ */
+export interface HalmosOptions extends BaseAnalyzerOptions {
+  /** Specific function to verify (runs all if omitted) */
+  functionFilter?: string;
+  /** Maximum loop unrolling depth */
+  loopBound?: number;
+  /** Solver timeout in seconds */
+  solverTimeout?: number;
+  /** Contract name to verify */
+  contractName?: string;
+}
+
+/**
  * Union type for all analyzer options
  */
 export type AnalyzerOptions =
@@ -118,7 +148,9 @@ export type AnalyzerOptions =
   | AderynOptions
   | SlangOptions
   | GasOptions
-  | CustomDetectorOptions;
+  | CustomDetectorOptions
+  | EchidnaOptions
+  | HalmosOptions;
 
 // ============================================================================
 // Output Types
