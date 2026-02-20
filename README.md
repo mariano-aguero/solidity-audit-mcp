@@ -84,7 +84,8 @@ Every PR that touches `.sol` files will be automatically audited.
 │  2. GitHub triggers the audit workflow                              │
 │                                                                     │
 │  3. MCP Audit Server runs ALL analyzers on changed .sol files       │
-│     (Slither, Aderyn, Slang AST, SWC patterns, Gas optimizer)       │
+│     (Slither, Aderyn, Slang AST, SWC patterns, Gas optimizer,       │
+│      Echidna & Halmos when opt-in test functions are present)        │
 │                                                                     │
 │  4. Results appear directly in your PR:                             │
 │     ├── ✓ Inline annotations on problematic lines                   │
@@ -1483,6 +1484,8 @@ MIT
 
 - [Slither](https://github.com/crytic/slither) by Trail of Bits
 - [Aderyn](https://github.com/Cyfrin/aderyn) by Cyfrin
+- [Echidna](https://github.com/crytic/echidna) by Trail of Bits
+- [Halmos](https://github.com/a16z/halmos) by a16z
 - [Slang](https://github.com/NomicFoundation/slang) by Nomic Foundation
 - [SWC Registry](https://swcregistry.io/) by SmartContractSecurity
 - [Foundry](https://github.com/foundry-rs/foundry) by Paradigm

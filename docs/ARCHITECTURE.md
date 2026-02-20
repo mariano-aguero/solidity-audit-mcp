@@ -55,6 +55,8 @@ flowchart TB
         O[AderynAdapter]
         P[SlangAdapter]
         Q[GasAdapter]
+        R[EchidnaAdapter]
+        S[HalmosAdapter]
     end
 
     A --> D
@@ -70,7 +72,7 @@ flowchart TB
     G --> H
     H --> L
     L --> M
-    M --> N & O & P & Q
+    M --> N & O & P & Q & R & S
 ```
 
 ---
@@ -140,7 +142,7 @@ src/server/
 
 ## Analyzer Architecture
 
-Uses **Adapter Pattern** for unified analyzer interface:
+Uses **Adapter Pattern** for unified analyzer interface. Each adapter is **self-contained** — it owns its full implementation (runner, parser, deduplication) and re-exports all public symbols.
 
 ```mermaid
 classDiagram
@@ -158,16 +160,36 @@ classDiagram
         #formatResult()
     }
 
-    class SlitherAdapter
-    class AderynAdapter
-    class SlangAdapter
-    class GasAdapter
+    class SlitherAdapter {
+        +SLITHER_DETECTOR_MAP
+        +getSlitherDetectors()
+    }
+    class AderynAdapter {
+        +deduplicateFindings()
+    }
+    class SlangAdapter {
+        +parseContractInfo()
+        +detectPatterns()
+        +analyzeWithSlang()
+    }
+    class GasAdapter {
+        +GAS_PATTERNS
+        +analyzeGasPatterns()
+    }
+    class EchidnaAdapter {
+        note: opt-in, requires echidna_* functions
+    }
+    class HalmosAdapter {
+        note: opt-in, requires check_* functions
+    }
 
     IAnalyzer <|.. BaseAnalyzer
     BaseAnalyzer <|-- SlitherAdapter
     BaseAnalyzer <|-- AderynAdapter
     BaseAnalyzer <|-- SlangAdapter
     BaseAnalyzer <|-- GasAdapter
+    BaseAnalyzer <|-- EchidnaAdapter
+    BaseAnalyzer <|-- HalmosAdapter
 
     class AnalyzerRegistry {
         +get(id)
@@ -184,6 +206,8 @@ classDiagram
     AnalyzerOrchestrator --> AnalyzerRegistry
 ```
 
+> **Note:** The legacy files `slither.ts`, `aderyn.ts`, `slangAnalyzer.ts`, and `gasOptimizer.ts` were merged into their respective adapters and deleted.
+
 ---
 
 ## Audit Pipeline
@@ -199,11 +223,15 @@ flowchart TB
     D --> F[AderynAdapter]
     D --> G[SlangAdapter]
     D --> H[GasAdapter]
+    D --> R[EchidnaAdapter<br><i>opt-in</i>]
+    D --> S[HalmosAdapter<br><i>opt-in</i>]
 
     E --> I[Collect Results]
     F --> I
     G --> I
     H --> I
+    R --> I
+    S --> I
 
     I --> J[Deduplicate Findings]
     J --> K[Sort by Severity]
@@ -213,18 +241,20 @@ flowchart TB
 
 ---
 
-## Available Tools
+## Available Tools (10 total)
 
 | Tool | Description |
 |------|-------------|
 | `analyze_contract` | Full security audit with all analyzers |
 | `audit_project` | Scan entire project directory |
-| `check_vulnerabilities` | Quick SWC Registry scan |
+| `check_vulnerabilities` | SWC Registry scan (86 detectors) |
 | `get_contract_info` | Contract metadata & attack surface |
-| `run_tests` | Run Foundry tests |
+| `run_tests` | Run Foundry tests with coverage |
 | `optimize_gas` | Gas optimization suggestions |
 | `diff_audit` | Compare contract versions |
 | `generate_report` | Format findings into report |
+| `generate_invariants` | Generate Foundry invariant test templates (auto-detects protocol type) |
+| `explain_finding` | Detailed KB explanation for 19 finding IDs + keyword search |
 
 ---
 
@@ -282,27 +312,67 @@ solidity-audit-mcp/
 │   │   ├── config.ts
 │   │   ├── McpServer.ts
 │   │   ├── handlers/
-│   │   ├── health/
+│   │   ├── health/        # healthCheck.ts — 7 analyzers, cached status
 │   │   ├── middleware/
 │   │   ├── schemas/
 │   │   └── tools/
 │   │
-│   ├── analyzers/         # Analyzer adapters
+│   ├── analyzers/         # Analyzer adapters (self-contained)
 │   │   ├── IAnalyzer.ts
 │   │   ├── AnalyzerRegistry.ts
 │   │   ├── AnalyzerOrchestrator.ts
 │   │   └── adapters/
+│   │       ├── SlitherAdapter.ts   # Slither runner + detector map
+│   │       ├── AderynAdapter.ts    # Aderyn runner + deduplication
+│   │       ├── SlangAdapter.ts     # AST parsing (@nomicfoundation/slang)
+│   │       ├── GasAdapter.ts       # Gas optimization patterns
+│   │       ├── EchidnaAdapter.ts   # Property fuzzer (opt-in)
+│   │       └── HalmosAdapter.ts    # Symbolic execution (opt-in)
 │   │
-│   ├── tools/             # MCP tool implementations
+│   ├── tools/             # MCP tool implementations (10 tools)
+│   │   ├── analyzeContract.ts
+│   │   ├── getContractInfo.ts
+│   │   ├── checkVulnerabilities.ts
+│   │   ├── runTests.ts
+│   │   ├── generateReport.ts
+│   │   ├── optimizeGas.ts
+│   │   ├── diffAudit.ts
+│   │   ├── auditProject.ts
+│   │   ├── generateInvariants.ts   # Foundry invariant test generator
+│   │   └── explainFinding.ts       # KB: 19 findings, 25+ keywords
+│   │
 │   ├── templates/         # Markdown report templates
 │   ├── types/             # TypeScript type definitions
 │   └── utils/             # Utility functions
 │
-├── __tests__/             # Test suite
-├── docker/                # Docker compose files
-├── Dockerfile             # Local Docker
-└── Dockerfile.saas        # SaaS Docker
+├── __tests__/             # Test suite (486 tests)
+└── docker/
+    ├── Dockerfile.saas         # SaaS Docker (HTTP/SSE) — all tools included
+    ├── Dockerfile.dev          # Development Docker
+    ├── docker-compose.yml      # Local orchestration
+    └── docker-compose.saas.yml # SaaS deployment
 ```
+
+---
+
+## Health Check (7 Analyzers)
+
+The `/health` endpoint reports the availability of all analyzers:
+
+| Analyzer | Type | Required | Notes |
+|----------|------|----------|-------|
+| `slither` | External binary (Python) | Core | 90+ detectors |
+| `aderyn` | External binary (Rust) | Core | Fast AST-based |
+| `forge` | External binary | Core | Test execution |
+| `solc` | External binary | Core | Solidity compiler |
+| `echidna` | External binary | Opt-in | x86_64 only |
+| `halmos` | External binary | Opt-in | Requires z3-solver |
+| `slang` | npm package (built-in) | Built-in | Always available |
+
+**Status logic:**
+- `healthy` — Slither + Forge both available
+- `degraded` — Only one core tool, or only Slang
+- `unhealthy` — No analyzers available (HTTP 503)
 
 ---
 
@@ -314,10 +384,16 @@ Client  ──▶  Entry Point  ──▶  Server Module  ──▶  Orchestrato
                            ┌─────────┼─────────┐
                            ▼         ▼         ▼
                         Handler   Health   Middleware
-                           │
-                   ┌───────┼───────┬───────┐
-                   ▼       ▼       ▼       ▼
-                Slither  Aderyn  Slang   Gas
+                           │         │
+                           │    (7 analyzers:
+                           │     slither, aderyn,
+                           │     forge, solc,
+                           │     echidna, halmos,
+                           │     slang)
+                   ┌───────┼───────┬───────┬─────────┬────────┐
+                   ▼       ▼       ▼       ▼         ▼        ▼
+                Slither  Aderyn  Slang   Gas     Echidna  Halmos
+                                              (opt-in) (opt-in)
 ```
 
 ---
@@ -334,4 +410,4 @@ Client  ──▶  Entry Point  ──▶  Server Module  ──▶  Orchestrato
 
 ---
 
-*Solidity Audit MCP v1.0.0*
+*Solidity Audit MCP v1.6.0*
