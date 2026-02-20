@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.1] - 2026-02-20
+
+### Changed
+- **README** — Added Echidna and Halmos to "What It Does" external analyzers list; added full install instructions for both tools (brew/binary for Echidna, pip for Halmos) with ARM64 caveats; added both to Acknowledgments; updated CI workflow example to install Aderyn and solc-select alongside Slither
+- **ARCHITECTURE.md** — Updated all diagrams to reflect 6 adapters (added EchidnaAdapter, HalmosAdapter); updated Available Tools table to 10 tools; expanded File Structure with all adapter and tool filenames; added Health Check section (7 analyzers, status logic); updated Quick Reference ASCII art; fixed Mermaid class diagram syntax for opt-in adapters; bumped version footer to v1.6.0
+- **CLAUDE.md** — Updated analyzer architecture section with self-contained adapter note, EchidnaAdapter and HalmosAdapter entries, legacy file warning; updated MCP Tools count 8→10; corrected all detector file paths to adapter locations; added explainFinding KB instructions
+
+---
+
 ## [1.6.0] - 2026-02-20
 
 ### Added
