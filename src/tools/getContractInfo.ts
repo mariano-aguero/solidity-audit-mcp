@@ -172,6 +172,11 @@ function formatOutput(
   // Header
   lines.push("═══════════════════════════════════════════════════════════════════════════════");
   lines.push(`  CONTRACT INFO: ${info.name}`);
+  if (info.contractsInFile && info.contractsInFile.length > 1) {
+    lines.push(
+      `  (Primary contract — file also contains: ${info.contractsInFile.filter((n) => n !== info.name).join(", ")})`
+    );
+  }
   lines.push("═══════════════════════════════════════════════════════════════════════════════");
   lines.push("");
 

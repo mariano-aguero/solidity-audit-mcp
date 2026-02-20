@@ -1259,6 +1259,126 @@ const SWC_PATTERNS: SWCPattern[] = [
       "Add access control: require(msg.sender == owner) or use OpenZeppelin's Ownable/AccessControl.",
     references: ["https://docs.openzeppelin.com/contracts/access-control"],
   },
+
+  // CUSTOM-018: ERC-7702 Unprotected Initializer After setCode
+  {
+    id: "CUSTOM-018",
+    title: "ERC-7702 Unprotected Initializer After setCode",
+    description:
+      "ERC-7702 allows EOAs to delegate execution to a smart contract via setCode. " +
+      "If the delegated contract exposes an initialize() function without checking whether " +
+      "it was already called, an attacker can call initialize() on a victim's EOA after delegation " +
+      "and take ownership of it. This is analogous to the uninitialized proxy attack.",
+    severity: Severity.CRITICAL,
+    patterns: [
+      // initialize() function without initializer modifier or already-initialized guard
+      /function\s+initialize\s*\([^)]*\)\s*(?:external|public)(?:(?!initializer|_initialized|initialized\s*=|require\s*\(\s*!initialized|if\s*\(\s*initialized)[\s\S])*?\{/gs,
+      // reinitializer without version check
+      /function\s+initialize\w*\s*\([^)]*\)\s*(?:external|public)\s*(?:virtual\s*)?(?:override\s*)?\{(?:(?!reinitializer|_initialized)[\s\S])*?owner\s*=/gs,
+    ],
+    negativePatterns: [
+      /initializer/g,
+      /reinitializer/g,
+      /_initialized/g,
+      /require\s*\(\s*!initialized/g,
+      /if\s*\(\s*initialized\s*\)\s*revert/g,
+    ],
+    remediation:
+      "Guard initialize() with OpenZeppelin's Initializable.initializer modifier. " +
+      "Call _disableInitializers() in the constructor to prevent re-initialization. " +
+      "For ERC-7702 contexts, verify the caller is the EOA itself: require(msg.sender == address(this));",
+    references: [
+      "https://eips.ethereum.org/EIPS/eip-7702",
+      "https://docs.openzeppelin.com/upgrades-plugins/1.x/writing-upgradeable#initializing_the_implementation_contract",
+    ],
+  },
+
+  // CUSTOM-019: ERC-7702 Cross-Chain Signature Replay (chainId = 0)
+  {
+    id: "CUSTOM-019",
+    title: "ERC-7702 Cross-Chain Signature Replay via chainId=0",
+    description:
+      "ERC-7702 authorization tuples include a chain_id field. When chain_id is set to 0, " +
+      "the authorization is valid on ALL chains. Contracts that verify ERC-7702 delegations " +
+      "without checking the chain ID allow replay attacks across chains: a delegation signed " +
+      "on a testnet can be replayed on mainnet to take control of the EOA.",
+    severity: Severity.HIGH,
+    patterns: [
+      // Signature verification without chainId or block.chainid check
+      /ecrecover\s*\([^)]*\)(?:(?!block\.chainid|chainId|chain_id)[\s\S])*?(?:setCode|delegation|authorize)/gis,
+      // EIP-712 domain without chainId field
+      /DOMAIN_SEPARATOR\s*=\s*keccak256\s*\(\s*abi\.encode\s*\([^)]*(?!block\.chainid|chainId)[^)]*\)\s*\)/gs,
+    ],
+    negativePatterns: [/block\.chainid/g, /chainId\s*:/g, /require\s*\([^)]*chainid/gi],
+    remediation:
+      "Always include block.chainid in the EIP-712 domain separator and in any signature hash " +
+      "used for ERC-7702 authorization. Reject authorizations with chain_id=0 if cross-chain " +
+      "delegation is not intended: require(chainId == block.chainid || chainId != 0);",
+    references: [
+      "https://eips.ethereum.org/EIPS/eip-7702",
+      "https://eips.ethereum.org/EIPS/eip-712",
+    ],
+  },
+
+  // CUSTOM-020: Transient Storage Reentrancy Guard Bypass via delegatecall
+  {
+    id: "CUSTOM-020",
+    title: "Transient Storage Reentrancy Guard Bypass via delegatecall",
+    description:
+      "EIP-1153 transient storage (tstore/tload) is cleared at the end of each transaction, " +
+      "but NOT when a new execution frame is entered via delegatecall. " +
+      "If a reentrancy guard stores its lock in transient storage and the contract uses delegatecall, " +
+      "the delegated code runs in the same execution context but the tstore slot may be in " +
+      "a different position depending on the callee's layout, effectively clearing the guard. " +
+      "An attacker can exploit this to bypass the reentrancy lock.",
+    severity: Severity.HIGH,
+    patterns: [
+      // tstore used as reentrancy guard combined with delegatecall
+      /tstore\s*\(/g,
+      // Assembly with tstore near delegatecall
+      /assembly\s*\{[^}]*tstore[^}]*\}[\s\S]*?\.delegatecall/gs,
+      /\.delegatecall[\s\S]*?assembly\s*\{[^}]*tstore[^}]*\}/gs,
+    ],
+    negativePatterns: [],
+    remediation:
+      "Do not use transient storage (tstore/tload) as a reentrancy guard in contracts that " +
+      "also use delegatecall. Use OpenZeppelin's ReentrancyGuard (regular storage slot) instead. " +
+      "If you must use transient storage, ensure the guard slot cannot be cleared by delegatecall " +
+      "by using a well-known, namespaced slot (ERC-7201).",
+    references: [
+      "https://eips.ethereum.org/EIPS/eip-1153",
+      "https://eips.ethereum.org/EIPS/eip-7201",
+    ],
+  },
+
+  // CUSTOM-021: Transient Storage Cross-Function State Leak
+  {
+    id: "CUSTOM-021",
+    title: "Transient Storage Cross-Function State Leak",
+    description:
+      "Transient storage persists for the entire transaction, not just a single call. " +
+      "A value written with tstore in one function call is readable in subsequent calls " +
+      "within the same transaction. If an internal function reads transient storage assuming " +
+      "it is empty, but a previous call in the same transaction set it, the function may " +
+      "behave unexpectedly — allowing attackers to pre-set values via a crafted call sequence.",
+    severity: Severity.MEDIUM,
+    patterns: [
+      // tload without a corresponding tstore reset after use
+      /tload\s*\(/g,
+      // Mixing tstore and tload in different functions (hard to detect precisely, flag for review)
+      /assembly\s*\{[^}]*tload\s*\(/g,
+    ],
+    negativePatterns: [],
+    remediation:
+      "After reading transient storage with tload, immediately reset the slot to zero with tstore(slot, 0). " +
+      "Document which transient slots are used and their expected lifecycle. " +
+      "Consider adding invariant tests that call functions in different orders within the same transaction " +
+      "to detect unexpected transient state interactions.",
+    references: [
+      "https://eips.ethereum.org/EIPS/eip-1153",
+      "https://soliditylang.org/blog/2024/01/26/transient-storage/",
+    ],
+  },
 ];
 
 // ============================================================================

@@ -534,6 +534,8 @@ export interface ParsedContract extends ContractInfo {
   events: string[];
   errors: string[];
   modifiers: string[];
+  /** All contract/interface/library names defined in the file (when > 1) */
+  contractsInFile?: string[];
 }
 
 /**
@@ -590,14 +592,20 @@ export function parseContractInfoFromSource(source: string, contractPath: string
   // Extract imports
   const imports = extractImportsFromSource(source);
 
-  // Find the main contract definition
+  // Find all contract definitions in the file
   const contractQuery = Query.create(`@contract [ContractDefinition]`);
 
-  let contractName = basename(contractPath, ".sol");
-  let inherits: string[] = [];
-  let contractBody = "";
-  let isAbstract = false;
-  let isLibrary = false;
+  interface ContractEntry {
+    name: string;
+    body: string;
+    inherits: string[];
+    isAbstract: boolean;
+    isLibrary: boolean;
+    isInterface: boolean;
+    functionCount: number;
+  }
+
+  const allContracts: ContractEntry[] = [];
 
   for (const match of cursor.query([contractQuery])) {
     const captures = match.captures;
@@ -609,59 +617,97 @@ export function parseContractInfoFromSource(source: string, contractPath: string
       const textRange = node.textRange;
       const contractText = source.slice(textRange.start.utf8, textRange.end.utf8);
 
-      // Extract contract name and type
-      // Use a more specific regex that matches at line start (with optional whitespace) to avoid matching comments
       const nameMatch = contractText.match(
         /^\s*(?:abstract\s+)?(contract|interface|library)\s+(\w+)/m
       );
 
       if (nameMatch) {
-        isAbstract = contractText.trim().startsWith("abstract");
         const matchedType = nameMatch[1] as "contract" | "interface" | "library";
-        isLibrary = matchedType === "library";
-        contractName = nameMatch[2] ?? contractName;
+        const name = nameMatch[2] ?? basename(contractPath, ".sol");
+        const entryIsAbstract = contractText.trim().startsWith("abstract");
+        const entryIsLibrary = matchedType === "library";
+        const entryIsInterface = matchedType === "interface";
 
-        // Extract inheritance - match only the contract declaration line, not comments
-        // First, find the actual contract declaration line
         const contractDeclMatch = contractText.match(
           /^\s*(?:abstract\s+)?(?:contract|interface|library)\s+\w+\s+is\s+([^{]+)/m
         );
-        if (contractDeclMatch) {
-          inherits = contractDeclMatch[1]!
+        const entryInherits = contractDeclMatch
+          ? contractDeclMatch[1]!
+              .split(",")
+              .map((s) => s.trim().split("(")[0]!.trim())
+              .filter((s) => Boolean(s) && /^\w+$/.test(s))
+          : [];
+
+        const fnCount = (contractText.match(/\bfunction\s+\w+/g) || []).length;
+
+        allContracts.push({
+          name,
+          body: contractText,
+          inherits: entryInherits,
+          isAbstract: entryIsAbstract,
+          isLibrary: entryIsLibrary,
+          isInterface: entryIsInterface,
+          functionCount: fnCount,
+        });
+      }
+    }
+  }
+
+  // If AST query found nothing, fall back to regex to collect all contracts
+  if (allContracts.length === 0) {
+    const contractRegex =
+      /^\s*(?:abstract\s+)?(contract|interface|library)\s+(\w+)(?:\s+is\s+([^{]+))?\s*\{/gm;
+    let m;
+    while ((m = contractRegex.exec(source)) !== null) {
+      const matchedType = m[1] as "contract" | "interface" | "library";
+      const name = m[2] ?? basename(contractPath, ".sol");
+      const entryInherits = m[3]
+        ? m[3]
             .split(",")
             .map((s) => s.trim().split("(")[0]!.trim())
-            .filter((s) => Boolean(s) && /^\w+$/.test(s)); // Only valid identifiers
-        }
-
-        // Store contract body for further parsing
-        contractBody = contractText;
-        break; // Use first contract found
-      }
+            .filter(Boolean)
+        : [];
+      const body = extractContractBodyFromSource(source, name);
+      const fnCount = (body.match(/\bfunction\s+\w+/g) || []).length;
+      allContracts.push({
+        name,
+        body,
+        inherits: entryInherits,
+        isAbstract: source.slice(0, m.index).trimEnd().endsWith("abstract"),
+        isLibrary: matchedType === "library",
+        isInterface: matchedType === "interface",
+        functionCount: fnCount,
+      });
     }
-    if (contractBody) break;
   }
 
-  // If no contract found via query, try regex fallback
+  // Pick the primary contract: prefer concrete contracts over interfaces/libraries,
+  // then the one with the most functions (most likely to be the main one).
+  const primaryEntry =
+    allContracts.find((c) => !c.isInterface && !c.isLibrary) ??
+    allContracts.find((c) => !c.isInterface) ??
+    allContracts[0];
+
+  let contractName = basename(contractPath, ".sol");
+  let inherits: string[] = [];
+  let contractBody = "";
+  let isAbstract = false;
+  let isLibrary = false;
+
+  if (primaryEntry) {
+    contractName = primaryEntry.name;
+    inherits = primaryEntry.inherits;
+    contractBody = primaryEntry.body;
+    isAbstract = primaryEntry.isAbstract;
+    isLibrary = primaryEntry.isLibrary;
+  }
+
   if (!contractBody) {
-    const contractMatch = source.match(
-      /^\s*(?:abstract\s+)?(contract|interface|library)\s+(\w+)(?:\s+is\s+([^{]+))?\s*\{/m
-    );
-    if (contractMatch) {
-      isAbstract = source.includes("abstract " + contractMatch[1]);
-      const matchedType = contractMatch[1] as "contract" | "interface" | "library";
-      isLibrary = matchedType === "library";
-      contractName = contractMatch[2] ?? contractName;
-      if (contractMatch[3]) {
-        inherits = contractMatch[3]
-          .split(",")
-          .map((s) => s.trim().split("(")[0]!.trim())
-          .filter(Boolean);
-      }
-      contractBody = extractContractBodyFromSource(source, contractName);
-    } else {
-      contractBody = source;
-    }
+    contractBody = source;
   }
+
+  // Names of all contracts found in the file (useful when > 1)
+  const allContractNames = allContracts.map((c) => c.name);
 
   // Parse components from contract body
   const functions = extractFunctionsFromBody(contractBody);
@@ -691,6 +737,7 @@ export function parseContractInfoFromSource(source: string, contractPath: string
     modifiers: modifierDefs,
     isAbstract,
     isLibrary,
+    contractsInFile: allContractNames.length > 1 ? allContractNames : undefined,
   };
 }
 
