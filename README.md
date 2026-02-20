@@ -49,10 +49,15 @@ jobs:
 
       - name: Install audit tools
         run: |
-          pip install slither-analyzer
+          pip install slither-analyzer solc-select
+          solc-select install 0.8.28 && solc-select use 0.8.28
           curl -L https://foundry.paradigm.xyz | bash
           ~/.foundry/bin/foundryup
           echo "$HOME/.foundry/bin" >> $GITHUB_PATH
+          # Install Aderyn (x86_64 Linux)
+          ADERYN_VER=$(curl -sf https://api.github.com/repos/Cyfrin/aderyn/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+          curl -fL "https://github.com/Cyfrin/aderyn/releases/download/${ADERYN_VER}/aderyn-x86_64-unknown-linux-gnu.tar.xz" | tar -xJf - -C /tmp
+          sudo install -m 755 /tmp/aderyn /usr/local/bin/aderyn
           npm install -g solidity-audit-mcp
 
       - name: Run Audit
@@ -197,10 +202,12 @@ The Solidity Audit MCP provides AI assistants (like Claude) with the ability to 
 - **Slither** - Trail of Bits' static analysis framework with 90+ vulnerability detectors
 - **Aderyn** - Cyfrin's Rust-based analyzer for fast, accurate detection
 - **Foundry** - Run forge tests and get coverage reports
+- **Echidna** *(opt-in)* - Trail of Bits' property-based fuzzer; activates when contracts contain `echidna_*` test functions (x86_64 only)
+- **Halmos** *(opt-in)* - Symbolic execution engine; activates when contracts contain `check_*` test functions
 
 **Built-in Analysis (no external dependencies):**
 - **Slang Parser** - Nomic Foundation's Solidity parser (`@nomicfoundation/slang`) for precise AST-based vulnerability detection. Included as npm dependency.
-- **SWC Pattern Matching** - Detection against the Smart Contract Weakness Classification registry
+- **SWC Pattern Matching** - Detection against the Smart Contract Weakness Classification registry (86 detectors)
 
 Findings from multiple tools are automatically deduplicated and sorted by severity, giving you a unified view of potential issues.
 
@@ -285,6 +292,46 @@ sudo apt-get install solc
 # Verify installation
 solc --version
 ```
+
+### Echidna *(optional — property fuzzer)*
+
+Property-based fuzzer by Trail of Bits. Only needed if your contracts define `echidna_*` test functions.
+
+**Pre-built binary (Linux x86_64 / macOS):**
+
+```bash
+# macOS (via brew)
+brew install echidna
+
+# Linux x86_64 — download latest pre-built binary
+ECHIDNA_VER=$(curl -sf https://api.github.com/repos/crytic/echidna/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+ECHIDNA_VER_CLEAN="${ECHIDNA_VER#v}"
+curl -L "https://github.com/crytic/echidna/releases/download/${ECHIDNA_VER}/echidna-${ECHIDNA_VER_CLEAN}-x86_64-linux.tar.gz" -o /tmp/echidna.tar.gz
+tar -xzf /tmp/echidna.tar.gz -C /tmp
+sudo install -m 755 /tmp/echidna /usr/local/bin/echidna
+
+# Verify installation
+echidna --version
+```
+
+> **Note:** No pre-built ARM64 (Apple Silicon) binary is available. On ARM64, Echidna is skipped gracefully — all other analyzers remain functional.
+
+### Halmos *(optional — symbolic execution)*
+
+Symbolic execution engine by a16z. Only needed if your contracts define `check_*` test functions.
+
+```bash
+# Using pip (requires Python 3.8+)
+pip install halmos
+
+# Or using pipx
+pipx install halmos
+
+# Verify installation
+halmos --version
+```
+
+> **Note:** Halmos depends on `z3-solver`. On ARM64 (Apple Silicon), a pre-built wheel may not be available and compilation from source requires `cmake` and `build-essential`. If install fails, Halmos is skipped gracefully.
 
 ## Installation
 
@@ -1280,7 +1327,7 @@ solidity-audit-mcp/
 │   │       ├── EchidnaAdapter.ts  # Property fuzzer (opt-in)
 │   │       └── HalmosAdapter.ts   # Symbolic execution (opt-in)
 │   │
-│   ├── tools/                # MCP tool implementations
+│   ├── tools/                # MCP tool implementations (10 tools)
 │   │   ├── analyzeContract.ts
 │   │   ├── getContractInfo.ts
 │   │   ├── checkVulnerabilities.ts
@@ -1288,7 +1335,9 @@ solidity-audit-mcp/
 │   │   ├── generateReport.ts
 │   │   ├── optimizeGas.ts
 │   │   ├── diffAudit.ts
-│   │   └── auditProject.ts
+│   │   ├── auditProject.ts
+│   │   ├── generateInvariants.ts  # Foundry invariant test generator
+│   │   └── explainFinding.ts      # Finding KB (19 entries, 25+ keywords)
 │   │
 │   ├── templates/            # Markdown report templates
 │   │   ├── index.ts          # Template utilities
